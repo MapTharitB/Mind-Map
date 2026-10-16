@@ -11,6 +11,8 @@
 --bg:hsl(222 25% 16%);--page:#14224a;--ink:#e6ecf7;--mute:#8b9bb8;--line:#27375f;--accent:#4cc9cc;--halo:#1f2f58;--btn:#182855}
 /* Canonical localized map glass; R12 header/Search use Outliner tokens. */
 :root{--map-glass-bg:rgba(0,0,0,.28);--map-hud-bg:rgba(0,0,0,.32);--map-glass-ink:rgba(255,255,255,.6);--map-hud-ink:rgba(255,255,255,.5);--map-glass-hover:rgba(0,0,0,.46);--map-glass-pressed:rgba(0,0,0,.55);--map-glass-blur:8px;--map-glass-radius:6px;--map-glass-pill:100px;--map-sync-border:rgba(255,255,255,.18);--map-panel-bg:rgba(28,34,47,.94)}
+/* iPad: paint the canvas through the bottom safe area; chrome applies that inset once. */
+html.ipad-safari-shell{padding-bottom:0}
 html{scroll-padding-top:env(safe-area-inset-top,0px);height:100%}
 *,*::before,*::after{box-sizing:inherit}
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;height:100%;display:flex;flex-direction:column;overflow:hidden}
@@ -31,7 +33,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 .map-controls.short-controls{left:auto;width:min(144px,100%);overflow-y:auto;pointer-events:auto}
 .map-controls.short-controls::after{content:"";display:block;height:128px}
 .map-controls.short-controls #map-options{position:fixed;max-width:calc(100vw - 32px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px))}
-#map-more{top:14px;width:44px;height:44px;padding:0;background:var(--map-glass-bg);color:var(--map-glass-ink);border-color:var(--map-sync-border);backdrop-filter:blur(var(--map-glass-blur));-webkit-backdrop-filter:blur(var(--map-glass-blur))}
+#map-more{top:14px;width:44px;height:44px;padding:0;display:flex;align-items:center;justify-content:center;background:var(--map-glass-bg);color:var(--map-glass-ink);border-color:var(--map-sync-border);backdrop-filter:blur(var(--map-glass-blur));-webkit-backdrop-filter:blur(var(--map-glass-blur))}
 @media(hover:hover){#map-more:hover{background:var(--map-glass-hover)}}
 #map-more:active{background:var(--map-glass-pressed)}
 .r12-supplied{display:flex;align-items:center;gap:8px;width:100%;min-width:222px}
@@ -87,7 +89,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
   <div id="divider" role="separator" aria-label="Outline pane width" aria-orientation="vertical" aria-controls="outline-host" tabindex="0"></div>
   <section id="map-pane" aria-label="Mind Map">
     <div class="map-controls" hidden>
-      <button id="map-more" class="shell-button" aria-label="Map options" aria-expanded="false" aria-controls="map-options">…</button>
+      <button id="map-more" class="shell-button" aria-label="Map options" aria-expanded="false" aria-controls="map-options">⋯</button>
       <div id="map-options" hidden>
         <div id="settings-controls" hidden>
           <div class="option-row"><label class="option-label" for="hlimit-count">WRAP</label><div class="wrap-controls"><div class="stepper"><button id="wrap-down" aria-label="Decrease Wrap count">‹</button><input id="hlimit-count" aria-label="Wrap count" type="number" inputmode="numeric" min="1" step="1" value="3"><button id="wrap-up" aria-label="Increase Wrap count">›</button></div><label class="wrap-check"><input id="hlimit-enabled" type="checkbox" aria-label="Enable Wrap"></label></div></div>
@@ -115,12 +117,18 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 <script>
 (function(){
 'use strict';
+// Same best-effort identity as standalone Outliner; no extra module API or global.
+const ipadSafariShell = navigator.maxTouchPoints > 1 &&
+  (/iPad/i.test(navigator.userAgent) || navigator.platform === 'MacIntel' && /Macintosh/i.test(navigator.userAgent)) &&
+  /AppleWebKit/i.test(navigator.userAgent) && /Version\//i.test(navigator.userAgent) && /Safari\//i.test(navigator.userAgent) &&
+  !/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium|Android|Edg\/|OPR\//i.test(navigator.userAgent);
+if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
 /* MODULES — edit only these entries to choose independent releases.
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.5.1' },
-  mindmap: { src: './mindmap.js', v: '1.5.0' }
+  outliner: { src: './outliner.js', v: '1.6.3' },
+  mindmap: { src: './mindmap.js', v: '1.5.1' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus) {
@@ -380,7 +388,10 @@ function updateControlPlacement() {
   const panel=$('map-options'),host=$('map-host'),edge=Math.max(0,Math.min(W,displayedGeometry().width+displayedGeometry().left));
   const legal=Math.min(edge,Math.max(0,W-M));
   const base=workspace.getBoundingClientRect(),vv=window.visualViewport;
-  const keyboard=Math.max(0,base.bottom-(vv?vv.offsetTop+vv.height:window.innerHeight));
+  // Safari captures show page scrolling during keyboard/pinch pan: compare in DOM-rectangle coordinates.
+  const visibleBottom=vv?(ipadSafariShell&&Number.isFinite(vv.pageTop)?vv.pageTop-window.scrollY+vv.height:vv.offsetTop+vv.height):window.innerHeight;
+  const keyboard=Math.max(0,base.bottom-visibleBottom);
+  const bottomClearance=ipadSafariShell?'max(14px,calc(env(safe-area-inset-bottom,0px) - 5px))':'calc(14px + env(safe-area-inset-bottom,0px))';
   const controls=document.querySelector('.map-controls'),short=H-keyboard<116;
   controls.classList.toggle('short-controls',short);
   if(!short&&controls.scrollTop)controls.scrollTop=0;
@@ -388,9 +399,9 @@ function updateControlPlacement() {
   panel.style.top=(panelTop+(short?base.top:0))+'px';
   panel.style.maxHeight=Math.max(0,H-keyboard-panelTop-14)+'px';
   host.style.setProperty('--map-hud-left','max('+(legal+14)+'px,calc(14px + env(safe-area-inset-left,0px)))');
-  host.style.setProperty('--map-hud-bottom','calc('+(keyboard+14)+'px + env(safe-area-inset-bottom,0px))');
+  host.style.setProperty('--map-hud-bottom','calc('+keyboard+'px + '+bottomClearance+')');
   host.style.setProperty('--map-reset-top',short?(70-controls.scrollTop)+'px':'auto');
-  host.style.setProperty('--map-reset-bottom',short?'auto':'calc('+(keyboard+14)+'px + env(safe-area-inset-bottom,0px))');
+  host.style.setProperty('--map-reset-bottom',short?'auto':'calc('+keyboard+'px + '+bottomClearance+')');
   host.style.setProperty('--map-hud-max-width',Math.max(0,W-legal-14-16-112-12)+'px');
   controls.inert=covered;controls.style.visibility=covered?'hidden':'';
   for(const node of controls.querySelectorAll('button,input'))eligibleTarget(node,edge);
