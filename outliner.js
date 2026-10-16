@@ -1,10 +1,28 @@
-/* Outliner version 1.5.1 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.6.3 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 const originalHeader = String.raw`<!-- OUTLINER (WorkFlowy style outliner) - one self-contained file. READ THIS BEFORE EDITING.
      Every REQUIREMENT comment records something the owner explicitly asked for.
      Every DO NOT comment records something the owner rejected or that caused a real bug.
      Please do not refactor, simplify, rename, restyle, split the file or add features nobody asked for.
      Behaviour the owner described matters more than code elegance. Change only what the owner asks you to change. -->`;
+const ipadCSS = String.raw`
+/* Latest owner iPad toolbar exception: transient press feedback, never sticky touch hover. */
+.moa-outliner.ipad-safari .ic:hover{color:var(--mute)!important;border-color:transparent!important}
+.moa-outliner.ipad-safari .ic:active{color:var(--ink)!important;border-color:var(--line)!important}
+.moa-outliner.ipad-safari .kids{padding-left:36px}
+.moa-outliner.ipad-safari .row{padding-block:calc(var(--bh) * .075)}
+.moa-outliner.ipad-safari .arrow,.moa-outliner.ipad-safari .dots{top:calc(var(--bh) * .075);opacity:1}
+.moa-outliner.ipad-safari .arrow.open{transform:none}
+/* 48px nesting: centers fall between 1px guide centers at -84.5/-36.5/+11.5px. */
+.moa-outliner.ipad-safari .dots{left:-71px}
+/* Owner-approved V1.1: full glyph/width scale; vertical target fits the accepted first-line pitch. */
+.moa-outliner.ipad-safari .arrow{left:-22.5px;width:20px;font-size:32.5px;top:0;height:calc(var(--bh) * 1.15)}
+/* Owner-approved iPad gutter: give the outermost More button room while retaining guide/control geometry. */
+@container moa-outline (max-width:700px){.moa-outliner.ipad-safari .sheet,.moa-outliner.ipad-safari .head{padding-left:calc(var(--gut) + 80px)}}
+.moa-outliner.ipad-safari .arrow span{display:block;line-height:1}
+.moa-outliner.ipad-safari .arrow.open span{transform:rotate(90deg)}
+.moa-outliner.touch-moving .row.dragging,.moa-outliner.touch-moving .row.dragging *{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+`;
 const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and breadcrumb row span the whole app width and the outline scrollbar sits at the far right edge of the app.
    The outline TEXT must stay at the same horizontal position as the original centred 1040px column: --gut is that column's old side margin
    (14px, or half of the width beyond 1040px). .sheet and .head add their old paddings on top of --gut.
@@ -182,8 +200,8 @@ const template = String.raw`<div class="page">
     <div class="crumbs" id="ol-crumbs"></div>
     <div class="tools">
     <span class="tg">
-    <button class="t ic kb" id="ol-inBtn" title="Indent (Tab)" aria-label="Indent">→</button>
     <button class="t ic kb" id="ol-outBtn" title="Outdent (Shift+Tab)" aria-label="Outdent">←</button>
+    <button class="t ic kb" id="ol-inBtn" title="Indent (Tab)" aria-label="Indent">→</button>
     </span><span class="tg">
     <button class="t ic kb" id="ol-undoBtn" title="Undo (Ctrl+Z)" aria-label="Undo">↺</button>
     <button class="t ic kb" id="ol-redoBtn" title="Redo (Ctrl+Y)" aria-label="Redo">↻</button>
@@ -202,17 +220,24 @@ const template = String.raw`<div class="page">
      Bullet menu: Expand All, Collapse All, Export Visible, Export, Delete. The word "subtree" was removed on purpose because context makes it clear.
      Export Visible exports only bullets that are currently expanded, never the children hidden by a collapsed bullet. -->
 <!-- Owner override 2026-10-16 (R12-3A): Clear All first; then separated style, expand/collapse and export groups. Historical REQUIREMENT above is retained verbatim. -->
-<div class="menu" id="ol-topMenu"><button data-a="clearAll">Clear All</button><div class="sep" role="separator"></div><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportAll">Export All</button></div>
-<div class="menu" id="ol-menu"><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><button data-a="delete">Delete</button></div>
+<!-- Latest owner override 2026-10-16 (V1.1): styles first; Clear All last after a separator. Supersedes the earlier Clear-All-first override retained above. -->
+<div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
+<div class="menu" id="ol-menu"><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
 function mount(container, opts = {}) {
 if (!(container instanceof Element)) throw new TypeError('Outliner.mount requires an Element');
+// Owner-approved iPad Safari exception. Identity is best-effort, never a viewport/pointer gate.
+const ipadSafari = navigator.maxTouchPoints > 1 &&
+  (/iPad/i.test(navigator.userAgent) || navigator.platform === 'MacIntel' && /Macintosh/i.test(navigator.userAgent)) &&
+  /AppleWebKit/i.test(navigator.userAgent) && /Version\//i.test(navigator.userAgent) && /Safari\//i.test(navigator.userAgent) &&
+  !/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium|Android|Edg\/|OPR\//i.test(navigator.userAgent);
 const integratedHeader = !!(opts.paneControls && opts.headerContent instanceof Element);
 let headerSlot = null;
 // R12-4B: optional opaque host edges share the existing private chronology.
 let historyHost = opts.historyHost && ['beforeCommand', 'apply', 'ownsKey'].every(k => typeof opts.historyHost[k] === 'function') ? opts.historyHost : null;
+let ipadToolbarHistoryNoFocus = false;
 let historyBusy = false, historyPreparing = false, historyPreparedCommit = false, historyComposing = false, historyNativeContext = false;
 function historyCallback(name, ...args) {
   try { return historyHost && historyHost[name](...args) === true; }
@@ -239,7 +264,8 @@ let destroyed = false, resizeObserver = null, lastOwnedInteraction = false, hist
 const timers = new Set(), frames = new Set(), listeners = new WeakMap(), globalListeners = [];
 const hadHostClass = container.classList.contains('moa-outliner');
 container.classList.add('moa-outliner');
-const style = document.createElement('style'); style.textContent = css + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
+if (ipadSafari) container.classList.add('ipad-safari');
+const style = document.createElement('style'); style.textContent = css + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
 const fragment = document.createElement('template'); fragment.innerHTML = originalHeader + template;
 const ownedNodes = [...fragment.content.childNodes];
 container.append(style, fragment.content);
@@ -285,7 +311,7 @@ function ownsEvent(e, historyShortcut = false) {
 }
 function destroy() {
   if (destroyed) return;
-  destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
+  cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
   frames.forEach(id => window.cancelAnimationFrame(id)); frames.clear();
@@ -302,7 +328,7 @@ function destroy() {
   };
   if (headerSlot) opts.headerContent.remove(); // Supplied content/listeners belong to the host.
   ownedNodes.forEach(node => { clean(node); node.remove(); });
-  dropLine.remove(); style.remove(); container.classList.remove('multi', 'pane-controls', 'pane-narrow', 'pane-small', 'integrated-header', 'pane-full');
+  dropLine.remove(); style.remove(); container.classList.remove('ipad-safari', 'touch-moving', 'multi', 'pane-controls', 'pane-narrow', 'pane-small', 'integrated-header', 'pane-full');
   if (!hadHostClass) container.classList.remove('moa-outliner');
   subscribers.forEach(set => set.clear()); transientToggles.clear();
   publicationQueued = false; dragSet = null; dragFrom = dragTA = null;
@@ -571,7 +597,7 @@ function restore(i) {
   root = fix(d.root); zoom = find(root, d.zoom) || root; sel.clear();
   sKeep.clear(); keepIds.forEach(id => { const n = find(root, id); if (n) sKeep.add(n); });
   sOver.clear(); overIds.forEach(([id, v]) => { const n = find(root, id); if (n) sOver.set(n, v); });
-  const a = historyHost && !visibleHost() ? null : ownedActiveElement(); render(a && a.dataset && a.dataset.id ? +a.dataset.id : null);
+  const a = ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement(); render(a && a.dataset && a.dataset.id ? +a.dataset.id : null);
 }
 function undo() { if (tm) record(); if (hi > 0) restore(--hi); }
 function redo() { if (tm) record(); if (hi < hist.length - 1) restore(++hi); }
@@ -745,7 +771,7 @@ function row(n, inSel, d) {
   const r = el('div', 'row'); const selOn = inSel || sel.has(n); if (selOn) r.classList.add('sel'); els.set(n, r);
   setLevel(r, base + d);
   const ar = el('button', 'arrow' + (n.children.length ? '' : ' hide') + (isOpen(n) ? ' open' : ''));
-  ar.textContent = '▸'; ar.tabIndex = -1; ar.title = 'Collapse / expand (Ctrl+click: all levels)';
+  if (ipadSafari) { const glyph = document.createElement('span'); glyph.textContent = '▸'; ar.appendChild(glyph); } else ar.textContent = '▸'; ar.tabIndex = -1; ar.title = 'Collapse / expand (Ctrl+click: all levels)';
   // REQUIREMENT: Ctrl/Cmd+click on the triangle = expand all / collapse all for this bullet and everything below it.
   // The click must not select the row (see the row mousedown handler below, which skips the arrow).
   // Ctrl/Cmd+click expands or collapses this bullet and everything under it.
@@ -852,8 +878,8 @@ function aimDrop(e) {
   let ref, ry, t, childIndent = 0;
   if (!p || (nx && par.get(nx) === p)) { ref = nx; ry = rects[g].top; t = { parent: par.get(nx), before: nx }; }
   // Owner-approved leaf-gap enhancement (2026-10-16): 32px is the existing .kids margin + border + padding.
-  else if (!p.children.length && e.clientX >= rects[g - 1].left + (32 + 10) / 2) {
-    ref = p; ry = rects[g - 1].bottom; childIndent = 32; t = { parent: p, before: null, open: true };
+  else if (!p.children.length && e.clientX >= rects[g - 1].left + (touchGesture?.active ? 31.5 : (32 + 10) / 2)) {
+    ref = p; ry = rects[g - 1].bottom; childIndent = touchGesture?.active ? 48 : 32; t = { parent: p, before: null, open: true };
   }
   else {
     const chain = []; let a = p;
@@ -1032,8 +1058,16 @@ function clearAll() {
 container.querySelectorAll('.kb').forEach(b => listen(b, 'mousedown', e => e.preventDefault()));
 container.querySelector('#ol-inBtn').onclick = () => tab(false);
 container.querySelector('#ol-outBtn').onclick = () => tab(true);
-container.querySelector('#ol-undoBtn').onclick = () => historyHost ? runHistory('undo') : undo();
-container.querySelector('#ol-redoBtn').onclick = () => historyHost ? runHistory('redo') : redo();
+// Latest owner exception: an iPad toolbar history tap must not reopen a dismissed keyboard.
+// Only suppress the existing restore focus request when the zoom-compensated viewport is full height.
+function toolbarHistory(direction) {
+  const vv = window.visualViewport, previous = ipadToolbarHistoryNoFocus;
+  ipadToolbarHistoryNoFocus = ipadSafari && !!vv && vv.height * vv.scale >= document.documentElement.clientHeight - 1;
+  try { return historyHost ? runHistory(direction) : direction === 'undo' ? undo() : redo(); }
+  finally { ipadToolbarHistoryNoFocus = previous; }
+}
+container.querySelector('#ol-undoBtn').onclick = () => toolbarHistory('undo');
+container.querySelector('#ol-redoBtn').onclick = () => toolbarHistory('redo');
 
 // Global shortcuts (capture phase). Ctrl+A selects all visible bullets (not text), Ctrl+Z / Ctrl+Y undo and redo, Ctrl+C / Ctrl+X copy or cut the selection.
 // The search box and the zoom title keep their native keys. The shortcut letter is layout independent on purpose (Thai keyboard bug).
@@ -1240,6 +1274,96 @@ listen(container, 'mousemove', e => {
 });
 
 listen(container, 'mouseleave', () => { if (sbNear) { sbNear = false; showSb(); } });
+// iPad Safari touch move: initial defaults stay native; prevent only an active held move.
+let touchGesture = null, touchTimer = null, blockClickUntil = 0;
+const touchInside = (x, y) => {
+  const b = treeEl.getBoundingClientRect();
+  return x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+};
+function cancelTouch(reason) {
+  clearTimeout(touchTimer);
+  if (!touchGesture) return;
+  if (touchGesture.active) blockClickUntil = performance.now() + 900;
+  touchGesture = null; dragSet = null; clearDrop();
+  container.classList.remove('touch-moving');
+  container.querySelectorAll('.row.dragging').forEach(r => r.classList.remove('dragging'));
+}
+function aimTouch(x, y) {
+  // Keep real finger bounds/y. Only indentation x is anchored to the original bullet.
+  if (touchInside(x, y)) aimDrop({clientX:x - touchGesture.indentOffset, clientY:y}); else clearDrop();
+}
+listen(container, 'touchstart', e => {
+  if (e.touches.length !== 1) { cancelTouch('second finger'); return; }
+  if (!ipadSafari) return;
+  cancelTouch('new contact'); blockClickUntil = 0;
+  const row = e.target.closest('.row'), excluded = e.target.closest('.arrow,.dots,.menu');
+  if (!row || excluded || historyComposing || neutralComposing || destroyed) return;
+  const textarea = row.querySelector('textarea');
+  // Eligibility captured before any browser focus default. Never blur/refocus.
+  if (textarea === document.activeElement) { return; }
+  const n = find(root, +row.parentElement.dataset.id), t = e.touches[0];
+  if (!n || !e.target.closest('.bullet,.tw,.row')) return;
+  const bullet = row.querySelector('.bullet').getBoundingClientRect();
+  // Bullet contacts retain their exact old x; body contacts share its center anchor.
+  const indentOffset = e.target.closest('.bullet') ? 0 : t.clientX - (bullet.left + bullet.width / 2);
+  touchGesture = {id:t.identifier, n, row, textarea, x:t.clientX, y:t.clientY, active:false,
+    indentOffset};
+  touchTimer = setTimeout(() => {
+    if (!touchGesture || destroyed || !row.isConnected || els.get(n) !== row || historyComposing || neutralComposing) { cancelTouch('unavailable'); return; }
+    touchGesture.active = true;
+    dragSet = sel.has(n) ? roots() : [n];
+    row.classList.add('dragging'); container.classList.add('touch-moving');
+    // Do not call aimDrop until movement: holding and releasing is cancellation.
+  }, 450);
+}, {capture:true, passive:true});
+listen(document, 'touchmove', e => {
+  if (!touchGesture) return;
+  if (destroyed || !touchGesture.row.isConnected || els.get(touchGesture.n) !== touchGesture.row) { cancelTouch('source replaced'); return; }
+  const t = [...e.touches].find(t => t.identifier === touchGesture.id);
+  if (!t || e.touches.length !== 1) { cancelTouch('contact changed'); return; }
+  if (!touchGesture.active) {
+    if (Math.hypot(t.clientX-touchGesture.x,t.clientY-touchGesture.y) > 10) cancelTouch('early movement: native scroll');
+    return;
+  }
+  if (!e.cancelable) { cancelTouch('noncancelable move: browser owns touchGesture'); return; }
+  e.preventDefault(); aimTouch(t.clientX,t.clientY);
+}, {capture:true, passive:false});
+listen(document, 'touchend', e => {
+  if (!touchGesture) return;
+  const t = [...e.changedTouches].find(t => t.identifier === touchGesture.id);
+  if (!t) return;
+  clearTimeout(touchTimer);
+  if (!touchGesture.active) { touchGesture = null; return; }
+  if (e.cancelable) e.preventDefault();
+  // Revalidate release geometry; never reuse a stale destination outside the tree.
+  const valid = !destroyed && touchGesture.row.isConnected && els.get(touchGesture.n) === touchGesture.row &&
+    dropT && (dropT.parent === root || par.has(dropT.parent)) && !inDrag(dropT.parent) &&
+    (!dropT.before || dropT.parent.children.includes(dropT.before));
+  const target = valid && touchInside(t.clientX,t.clientY) ? dropT : null, items = dragSet;
+  cancelTouch(target ? 'completed cleanup' : 'release without valid target');
+  if (target && items?.length && !destroyed) {
+    dropTo(items,target);
+  }
+}, {capture:true, passive:false});
+listen(document, 'touchcancel', () => cancelTouch('touchcancel'), true);
+listen(document, 'pointercancel', () => cancelTouch('pointercancel'), true);
+listen(window, 'blur', () => cancelTouch('window blur'));
+listen(document, 'visibilitychange', () => { if (document.hidden) cancelTouch('hidden'); });
+listen(container, 'compositionstart', () => cancelTouch('composition'), true);
+listen(treeEl, 'scroll', () => cancelTouch('tree scroll'), {passive:true});
+listen(document, 'keydown', e => { if (e.key === 'Escape') cancelTouch('Escape'); }, true);
+listen(container, 'click', e => {
+  if (performance.now() < blockClickUntil && e.target.closest('.row')) {
+    e.preventDefault(); e.stopImmediatePropagation();
+  }
+}, true);
+listen(container, 'contextmenu', e => {
+  if (touchGesture?.active) e.preventDefault();
+}, true);
+listen(container, 'dragstart', e => {
+  if (touchGesture) { e.preventDefault(); e.stopImmediatePropagation(); }
+}, true);
+
 load();
 if (saveBlocked) blockedTree = JSON.stringify(JSON.parse(snap()).root);
 render();
@@ -1252,5 +1376,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory };
 }
-window.Outliner = { version: '1.5.1', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history'], mount };
+window.Outliner = { version: '1.6.3', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history'], mount };
 })();
