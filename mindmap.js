@@ -1,4 +1,4 @@
-/* MindMap 1.5.0 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.5.1 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -15,7 +15,7 @@ function mount(container,opts={}){
   const owned=document.createElement('div');
   owned.className='mm-owned';
   style.textContent+="\n.moa-mindmap .mm-owned,.moa-mindmap .mm-owned *{box-sizing:border-box;margin:0;padding:0}\n.moa-mindmap #mm-empty{font-family:'Segoe UI',system-ui,-apple-system,sans-serif}\n.moa-mindmap #mm-empty,.moa-mindmap #mm-zoom-hud,.moa-mindmap #mm-btn-rst{line-height:normal}";
-  owned.innerHTML='<canvas id="mm-map"></canvas><div id="mm-empty"></div><div id="mm-zoom-hud">100%</div><button id="mm-btn-rst">⊡ Reset View</button><div id="mm-error" role="status" hidden></div>';
+  owned.innerHTML='<canvas id="mm-map"></canvas><div id="mm-empty"><div class="ico">🗺️</div><p>Start typing to build your map</p></div><div id="mm-zoom-hud">100%</div><button id="mm-btn-rst">⊡ Reset View</button><div id="mm-error" role="status" hidden></div>';
   // Placement variables are optional; standalone chrome retains its original positions.
   style.textContent+="\n.moa-mindmap #mm-zoom-hud,.moa-mindmap #mm-btn-rst{visibility:var(--map-chrome-visibility,visible)}\n.moa-mindmap #mm-zoom-hud{top:var(--map-hud-top,14px);bottom:var(--map-hud-bottom,auto);right:var(--map-control-right,16px);width:auto;max-width:var(--map-hud-max-width,none);height:var(--map-hud-height,auto);overflow:hidden}\n.moa-mindmap #mm-btn-rst{bottom:var(--map-reset-bottom,14px);top:var(--map-reset-top,auto);right:var(--map-control-right,16px);width:var(--map-reset-width,auto);height:var(--map-reset-height,auto);justify-content:center}\n.moa-mindmap.map-covered #mm-zoom-hud,.moa-mindmap.map-covered #mm-btn-rst{visibility:hidden;pointer-events:none}";
   // R12 managed chrome only; no drawing/layout/fit change.
@@ -939,7 +939,7 @@ function applyViewportInsets(value,{duration=0}={}){
   const changed=signature!==committedRect;committedRect=signature;
   const covered=rect.width<=0||rect.height<=0;
   container.classList.toggle('map-covered',covered);btnRst.inert=covered;hudEl.inert=covered;
-  updateChromeEligibility();
+  updateChromeEligibility();updateEmptyHint();
   if(covered){
     paused=true;pendingRender=pendingRender||rtimer!==null;
     clearTimeout(rtimer);rtimer=null;cancelAnimationFrame(_raf);_raf=null;
@@ -1130,7 +1130,7 @@ function setText(text,options={}){
   const indexes=options&&options.placeholderNodes;
   const placeholders=Array.isArray(indexes)?[...new Set(indexes.filter(i=>Number.isInteger(i)&&i>=0))].sort((a,b)=>a-b):[];
   text=String(text??'');if(text===sourceText&&placeholders.join(',')===sourcePlaceholders.join(','))return;
-  sourceText=text;sourcePlaceholders=placeholders;schedRender();
+  sourceText=text;sourcePlaceholders=placeholders;if(!text.trim())flushRender();else schedRender();
 }
 function getSettingBounds(){return{horizontalLimit:{min:1,max:hlimitCap(d1Max)}};}
 function getSettings(){return{horizontalLimit:{enabled:!hlimitInf,count:hlimitN},colorSeed:uiState.colorSeed};}
@@ -1257,5 +1257,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed};
 }
-window.MindMap={version:'1.5.0',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only'],mount};
+window.MindMap={version:'1.5.1',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only'],mount};
 })();
