@@ -1,4 +1,4 @@
-/* MindMap 1.7.4 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.7.6 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -218,7 +218,7 @@ function measureTextBlock(node,MD){
     let previous=null;
     for(const text of lines){
       const ink=inkMetrics(text,fs,'normal');
-      const y=previous?previous.baseline+Math.max(fs*C.LINE_H,previous.descent+ink.ascent+gap):Math.max(node.fs,baseline+title.descent)+gap+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
+      const y=previous?previous.baseline+Math.max(fs*C.LINE_H,previous.descent+ink.ascent+gap):Math.max(node.fs,baseline+title.descent)+gap+(title.descent>node.fs*0.02?title.descent*0.5:0)+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
       const run={text,fs,fw:'normal',x:(title.width-ink.width)/2,baseline:y,...ink,description:true};runs.push(run);previous=run;width=Math.max(width,ink.width);
     }
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
@@ -297,7 +297,7 @@ function footprintH(node,MD){
   if(!node.children.length)return node.fs*C.LINE_H+node.textBlock.extraHeight;
   const sR=node.depth>=1?C.CHILD_STEP_R:1;
   const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
-  let h=node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
+  let h=node.description!==undefined?node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
   for(let i=0;i<node.children.length;i++){
     const ch=node.children[i];
     if(i>0)h+=siblingGapDelta(ch,lastLeafFs(node.children[i-1]));
@@ -325,7 +325,7 @@ function place(node,y0){
   if(node.children.length){
     const sR=node.depth>=1?C.CHILD_STEP_R:1;
     const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
-    let yc=y0+node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
+    let yc=y0+(node.description!==undefined?node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight);
     for(let i=0;i<node.children.length;i++){
       const ch=node.children[i];
       if(i>0)yc+=siblingGapDelta(ch,lastLeafFs(node.children[i-1]));
@@ -361,7 +361,7 @@ function measureSubtree(node,MD,forceVertical=false){
       for(const offset of offsets){offset.x+=mW(node.label,node.fs,node.fw)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
     }else{
       const sR=node.depth>=1?C.CHILD_STEP_R:1,subGap=children[0].fs*C.SUB_GAP_R*sR;
-      let y=node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
+      let y=node.description!==undefined?node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
       const chars=[...node.label],first=chars.length?mW(chars[0],node.fs,node.fw):0;
       const spine=chars.filter(ch=>!isThaiSpineCombining(ch.codePointAt(0))).length===1?first/2:first;
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
@@ -445,7 +445,7 @@ function layoutGrid(root,MD,colorSeed){
   }
   const gridX1=d1ColX[cols-1]+colWidths[cols-1];
   const d1BaseGap_g=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
-  const d1Y_g=root.y+root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC);
+  const d1Y_g=root.y+(cols===1&&root.description!==undefined?root.textBlock.bottom+d1Fs*C.SUB_GAP_R+firstRowUpwardBonus([d1[0]],d1Fs):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
   const av_g=d1Y_g-root.y-root.fs-root.textBlock.extraHeight;
   const rg_g=Math.min(cgap(1,MD),av_g*0.3);
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
@@ -1415,5 +1415,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed};
 }
-window.MindMap={version:'1.7.4',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1'],mount};
+window.MindMap={version:'1.7.6',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1'],mount};
 })();
