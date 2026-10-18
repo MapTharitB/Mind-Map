@@ -1,4 +1,4 @@
-/* MindMap 1.7.6 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.7.7 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -8,7 +8,7 @@ function mount(container,opts={}){
   if(!(container instanceof Element))throw new TypeError('MindMap.mount requires an Element');
   let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceStats=null,sourceReady=false,rtimer=null;
   const timers=new Set(),frames=new Set(),listeners=[],objectURLs=new Set();
-  const hadClass=container.classList.contains('moa-mindmap');
+  const hadClass=container.classList.contains('moa-mindmap'),hadCoveredClass=container.classList.contains('map-covered');
   container.classList.add('moa-mindmap');
   const style=document.createElement('style');
   style.textContent=".moa-mindmap{position:relative;min-width:0;min-height:0;}\n.moa-mindmap #mm-map{position:absolute;top:0;left:0;z-index:1;display:block;cursor:grab;touch-action:none}\n.moa-mindmap #mm-map:active{cursor:grabbing}\n.moa-mindmap #mm-empty{position:absolute;z-index:2;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;pointer-events:none;transition:left .26s ease,width .26s ease;}\n.moa-mindmap #mm-empty .ico{font-size:44px;opacity:.16}\n.moa-mindmap #mm-empty p{font-size:13px;font-weight:500;color:rgba(110,108,120,0.55);letter-spacing:.01em;white-space:nowrap}\n.moa-mindmap #mm-zoom-hud{position:absolute;top:14px;right:16px;z-index:10;background:var(--map-hud-bg,var(--page));backdrop-filter:blur(var(--map-glass-blur,8px));-webkit-backdrop-filter:blur(var(--map-glass-blur,8px));color:var(--map-hud-ink,var(--mute));font-size:11px;font-family:'Cascadia Code',monospace;padding:5px 10px;border-radius:var(--map-glass-radius,6px);pointer-events:none;letter-spacing:.04em}\n.moa-mindmap #mm-btn-rst{position:absolute;bottom:14px;right:16px;z-index:10;background:var(--map-glass-bg,var(--btn));backdrop-filter:blur(var(--map-glass-blur,8px));-webkit-backdrop-filter:blur(var(--map-glass-blur,8px));color:var(--map-glass-ink,var(--ink));font-size:11px;font-weight:600;padding:6px 14px;border-radius:var(--map-glass-pill,100px);border:none;outline:none;cursor:pointer;letter-spacing:.04em;transition:background .15s,color .15s;display:flex;align-items:center;gap:5px;font-family:'Segoe UI',system-ui,-apple-system,sans-serif;-webkit-tap-highlight-color:transparent;user-select:none;}\n@media(hover:hover){.moa-mindmap #mm-btn-rst:hover{background:var(--map-glass-hover,var(--halo));color:var(--map-glass-ink,var(--ink))}}\n.moa-mindmap #mm-btn-rst:active{background:var(--map-glass-pressed,var(--accent));color:var(--map-glass-ink,var(--ink))}\n.moa-mindmap #mm-btn-rst:focus,.moa-mindmap #mm-btn-rst:focus-visible{outline:none}\n.moa-mindmap #mm-error{position:absolute;left:0;bottom:0;z-index:11;max-width:calc(100% - 150px);background:var(--page);color:var(--ink);font:inherit;pointer-events:none;}";
@@ -26,7 +26,7 @@ function mount(container,opts={}){
   const btnRst=owned.querySelector('#mm-btn-rst'),errorEl=owned.querySelector('#mm-error');
   function reportError(error){
     if(destroyed)return;
-    errorEl.textContent=error.message||String(error);errorEl.hidden=false;
+    errorEl.textContent=error?.message||String(error);errorEl.hidden=false;
     if(typeof opts.onError==='function'){try{opts.onError(error);}catch(hostError){console.error(hostError);}}
   }
   function guarded(fn){return function(...args){if(destroyed)return;try{return fn.apply(this,args);}catch(error){reportError(error);}};}
@@ -42,9 +42,62 @@ function mount(container,opts={}){
   listen(fontLink,'error',()=>reportError(new Error('Sarabun font stylesheet failed to load. Canvas uses the original fallback font.')));
   listen(fontLink,'load',()=>loadFonts());
   if(ownsFont)document.head.appendChild(fontLink);
+function createLayoutPreferences(){
 let hlimitInf=true,hlimitN=3,d1Max=Infinity,wrapBoundsReady=false;
 let levelsEnabled=false,levelsN=1,siblingLimitEnabled=true,siblingLimitN=3,branchDepthMax=1,branchSiblingMax=1,branchBoundsReady=false,levelsCountChosen=false,siblingCountChosen=false;
 function hlimitCap(d){return Math.max(1,d-1);}
+function apply(partial){
+  const limit=partial.horizontalLimit;
+  if(limit&&typeof limit==='object'){
+    if('enabled' in limit)hlimitInf=!limit.enabled;
+    if('count' in limit||!hlimitInf){const n='count' in limit?Number(limit.count):hlimitN;hlimitN=Math.max(1,Math.min(wrapBoundsReady?hlimitCap(d1Max):Number.MAX_SAFE_INTEGER,Math.round(isNaN(n)?1:n)));}
+  }
+  const deeper=partial.deeperHorizontal,siblings=partial.siblingLimit;
+  const safeCount=(value,min,max,current)=>{const number=Number(value),rounded=Math.round(number);return Number.isFinite(number)&&Number.isSafeInteger(rounded)?clamp(rounded,min,branchBoundsReady?max:Number.MAX_SAFE_INTEGER):current;};
+  if(deeper&&typeof deeper==='object'){if(typeof deeper.enabled==='boolean')levelsEnabled=deeper.enabled;if('levels' in deeper){const next=safeCount(deeper.levels,1,branchDepthMax,levelsN);levelsCountChosen=Number(deeper.levels)!==1;levelsN=next;}}
+  if(siblings&&typeof siblings==='object'){if(typeof siblings.enabled==='boolean')siblingLimitEnabled=siblings.enabled;if('count' in siblings){const next=safeCount(siblings.count,1,branchSiblingMax,siblingLimitN);siblingCountChosen=Number(siblings.count)!==3;siblingLimitN=next;}}
+  // Latest owner policy: activating either layout switches the other off.
+  // If an API/bootstrap request supplies both true, LEVELS wins deterministically.
+  if(deeper&&deeper.enabled===true)hlimitInf=true;
+  else if(limit&&limit.enabled===true)levelsEnabled=false;
+}
+function updateBranchBounds(root,sourceReady,sourceStats){
+  if(!sourceReady)return;
+  let stats=sourceStats;
+  if(!stats){let depth=0,siblings=root?root.synthetic?root.children.length:1:0;const walk=n=>{depth=Math.max(depth,n.depth);siblings=Math.max(siblings,n.children.length);n.children.forEach(walk);};if(root)walk(root);stats={maxDepth:depth,maxSiblings:siblings};}
+  const nextDepth=Math.max(1,stats.maxDepth),nextSiblings=Math.max(1,stats.maxSiblings);
+  const follow=(value,previous,next,min,chosen)=>chosen&&branchBoundsReady&&value===previous&&next>previous?next:clamp(value,min,next);
+  levelsN=levelsCountChosen?follow(levelsN,branchDepthMax,nextDepth,1,true):clamp(1,1,nextDepth);siblingLimitN=siblingCountChosen?follow(siblingLimitN,branchSiblingMax,nextSiblings,1,true):clamp(3,1,nextSiblings);
+  branchDepthMax=nextDepth;branchSiblingMax=nextSiblings;branchBoundsReady=true;
+}
+
+function observeRoot(root,sourceReady,sourceStats){
+  updateBranchBounds(root,sourceReady,sourceStats);
+  const nd=root.children.length||1;
+  if(!wrapBoundsReady||nd!==d1Max){
+    wrapBoundsReady=true;
+    const prevCap=hlimitCap(d1Max);d1Max=nd;
+    const newCap=hlimitCap(d1Max);
+    if(hlimitInf&&hlimitN===prevCap)hlimitN=newCap;
+    if(hlimitN>newCap)hlimitN=newCap;
+  }
+}
+function observeBlank(sourceReady,sourceStats){
+  updateBranchBounds(null,sourceReady,sourceStats);
+if(d1Max!==1||sourceReady&&!wrapBoundsReady){d1Max=1;if(hlimitN>1)hlimitN=1;}if(sourceReady)wrapBoundsReady=true;
+}
+function getSettingBounds(){return{horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
+function getSettings(){return{horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
+return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,
+  get hlimitInf(){return hlimitInf;},
+  get hlimitN(){return hlimitN;},
+  get levelsEnabled(){return levelsEnabled;},
+  get levelsN(){return levelsN;},
+  get siblingLimitEnabled(){return siblingLimitEnabled;},
+  get siblingLimitN(){return siblingLimitN;}
+};
+}
+const layoutPreferences=createLayoutPreferences();
 function safeFileName(label){
   return(label||'MindMap').replace(/[\/\\?%*:|"<>]/g,'-').trim()||'MindMap';
 }
@@ -66,10 +119,8 @@ const C={
   MAX_SAFE_FONT:   500,
   RENDER_DEBOUNCE: 180,
   BTN_DRAG_THRESH: 14,
-  EXPAND_THRESH:   10,
   ANIM_FIT:        300,
   ANIM_ZOOM:       280,
-  ANIM_PANEL:      200,
   ANIM_KB:         390,
   ANIM_KB_BTN:     350,
   ANIM_RST:        320,
@@ -237,7 +288,6 @@ function attachNodeTexts(root,texts){
 }
 const nodeWidth=n=>n.textBlock?n.textBlock.width:mW(n.label,n.fs,n.fw);
 
-function maxD(n,c=0){if(!n.children.length)return c;return Math.max(...n.children.map(ch=>maxD(ch,c+1)));}
 // Descriptions reserve two visual font levels, never real tree depth/statistics.
 function hasDescription(n){return n.description!==undefined||n.children.some(hasDescription);}
 function visualMaxD(root){let depth=0;const walk=n=>{depth=Math.max(depth,n.depth+(n.description!==undefined?2:0));n.children.forEach(walk);};walk(root);return depth;}
@@ -246,11 +296,13 @@ function lastLeafFs(n){return n.children.length?lastLeafFs(n.children[n.children
 /* ══ ARM / SPINE HELPERS ══ */
 const armLen=(d,MD)=>fsz(d,MD)*C.ARM_K;
 
-function spineXOf(node){
+function spineOffsetOf(node){
   const c=[...node.label],w1=c.length?mW(c[0],node.fs,node.fw):0;
   const effectiveLen=c.filter(ch=>!isThaiSpineCombining(ch.codePointAt(0))).length;
-  return node.x+(effectiveLen===1?w1/2:w1);
+  return (effectiveLen===1?w1/2:w1);
 }
+
+function spineXOf(node){return node.x+spineOffsetOf(node);}
 
 function assignSubtreeX(node,MD){
   if(node.subtree){for(const offset of node.subtree.childOffsets){offset.node.x=node.x+offset.x;assignSubtreeX(offset.node,MD);}return;}
@@ -267,9 +319,7 @@ function colW(n,MD){
   const wk=(node,rx)=>{
     const r=rx+nodeWidth(node);
     if(r>mx)mx=r;
-    const c=[...node.label],w1=c.length?mW(c[0],node.fs,node.fw):0;
-    const effectiveLen=c.filter(ch=>!isThaiSpineCombining(ch.codePointAt(0))).length;
-    const sx=rx+(effectiveLen===1?w1/2:w1);
+    const sx=rx+spineOffsetOf(node);
     node.children.forEach(ch=>wk(ch,sx+armLen(ch.depth,MD)));
   };
   wk(n,0);
@@ -292,12 +342,15 @@ function siblingGapDelta(ch,prevLastLeafFs){
 function lowerThaiChildBonus(parentNode,baseGap){
   return parentNode.hasLower?baseGap*C.LOWER_THAI_CHILD_R:0;
 }
+function describedChildrenOffset(node,subGap){
+  return node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs);
+}
 function footprintH(node,MD){
   if(node.subtree)return node.subtree.height;
   if(!node.children.length)return node.fs*C.LINE_H+node.textBlock.extraHeight;
   const sR=node.depth>=1?C.CHILD_STEP_R:1;
   const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
-  let h=node.description!==undefined?node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
+  let h=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
   for(let i=0;i<node.children.length;i++){
     const ch=node.children[i];
     if(i>0)h+=siblingGapDelta(ch,lastLeafFs(node.children[i-1]));
@@ -325,7 +378,7 @@ function place(node,y0){
   if(node.children.length){
     const sR=node.depth>=1?C.CHILD_STEP_R:1;
     const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
-    let yc=y0+(node.description!==undefined?node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight);
+    let yc=y0+(node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight);
     for(let i=0;i<node.children.length;i++){
       const ch=node.children[i];
       if(i>0)yc+=siblingGapDelta(ch,lastLeafFs(node.children[i-1]));
@@ -346,7 +399,7 @@ function measureSubtree(node,MD,forceVertical=false){
   if(!forceVertical)node.children.forEach(ch=>measureSubtree(ch,MD));
   let minX=node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
-  const horizontal=!forceVertical&&levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].depth>=2&&children[0].depth<=levelsN+1&&(!siblingLimitEnabled||children.length<=siblingLimitN);
+  const horizontal=!forceVertical&&layoutPreferences.levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].depth>=2&&children[0].depth<=layoutPreferences.levelsN+1&&(!layoutPreferences.siblingLimitEnabled||children.length<=layoutPreferences.siblingLimitN);
   if(children.length){
     if(horizontal){
       let cursor=0;
@@ -361,9 +414,8 @@ function measureSubtree(node,MD,forceVertical=false){
       for(const offset of offsets){offset.x+=mW(node.label,node.fs,node.fw)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
     }else{
       const sR=node.depth>=1?C.CHILD_STEP_R:1,subGap=children[0].fs*C.SUB_GAP_R*sR;
-      let y=node.description!==undefined?node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
-      const chars=[...node.label],first=chars.length?mW(chars[0],node.fs,node.fw):0;
-      const spine=chars.filter(ch=>!isThaiSpineCombining(ch.codePointAt(0))).length===1?first/2:first;
+      let y=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
+      const spine=spineOffsetOf(node);
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
       // Reserve the incoming vertical shaft corridor, including stroke and measured ink.
       // Forced rebuilds reuse measured children; each node is built at most twice.
@@ -380,16 +432,6 @@ function measureSubtree(node,MD,forceVertical=false){
   }
   node.subtree={minX,maxX,height,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
 }
-function updateBranchBounds(root){
-  if(!sourceReady)return;
-  let stats=sourceStats;
-  if(!stats){let depth=0,siblings=root?root.synthetic?root.children.length:1:0;const walk=n=>{depth=Math.max(depth,n.depth);siblings=Math.max(siblings,n.children.length);n.children.forEach(walk);};if(root)walk(root);stats={maxDepth:depth,maxSiblings:siblings};}
-  const nextDepth=Math.max(1,stats.maxDepth),nextSiblings=Math.max(1,stats.maxSiblings);
-  const follow=(value,previous,next,min,chosen)=>chosen&&branchBoundsReady&&value===previous&&next>previous?next:clamp(value,min,next);
-  levelsN=levelsCountChosen?follow(levelsN,branchDepthMax,nextDepth,1,true):clamp(1,1,nextDepth);siblingLimitN=siblingCountChosen?follow(siblingLimitN,branchSiblingMax,nextSiblings,1,true):clamp(3,1,nextSiblings);
-  branchDepthMax=nextDepth;branchSiblingMax=nextSiblings;branchBoundsReady=true;
-}
-
 function layoutSimple(root,MD,colorSeed){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
@@ -429,7 +471,7 @@ function layoutSimple(root,MD,colorSeed){
 function layoutGrid(root,MD,colorSeed){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
-  const cols=Math.min(hlimitN,NC);
+  const cols=Math.min(layoutPreferences.hlimitN,NC);
   const ARM1=armLen(1,MD);
   const d1Fs=d1[0].fs;
   const base=Math.floor(NC/cols),extra=NC%cols;
@@ -445,7 +487,7 @@ function layoutGrid(root,MD,colorSeed){
   }
   const gridX1=d1ColX[cols-1]+colWidths[cols-1];
   const d1BaseGap_g=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
-  const d1Y_g=root.y+(cols===1&&root.description!==undefined?root.textBlock.bottom+d1Fs*C.SUB_GAP_R+firstRowUpwardBonus([d1[0]],d1Fs):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
+  const d1Y_g=root.y+(cols===1&&root.description!==undefined?describedChildrenOffset(root,d1Fs*C.SUB_GAP_R):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
   const av_g=d1Y_g-root.y-root.fs-root.textBlock.extraHeight;
   const rg_g=Math.min(cgap(1,MD),av_g*0.3);
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
@@ -491,11 +533,11 @@ function layoutGrid(root,MD,colorSeed){
 }
 function layout(root,colorSeed){
   const MD=visualMaxD(root);annotateNodes(root,MD);
-  const described=hasDescription(root);if(levelsEnabled||described)measureSubtree(root,MD);
+  const described=hasDescription(root);if(layoutPreferences.levelsEnabled||described)measureSubtree(root,MD);
   const NC=root.children.length;
   // A lone real root child always uses the existing left-side vertical connector.
   if(NC===1&&!root.synthetic)return layoutGrid(root,MD,colorSeed);
-  return(levelsEnabled||hlimitInf||NC<=hlimitN)?layoutSimple(root,MD,colorSeed):layoutGrid(root,MD,colorSeed);
+  return(layoutPreferences.levelsEnabled||layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed):layoutGrid(root,MD,colorSeed);
 }
 
 /* ══ CONTENT BOUNDS ══ */
@@ -512,7 +554,7 @@ function contentBounds(lay){
     const ny1=baselineY+(m.actualBoundingBoxDescent??safeFs*0.20)*scaleRatio;
     const nx1=n.x+mW(n.label,n.fs,n.fw);
     if(!n.synthetic){if(n.x<x0)x0=n.x;if(ny0<y0)y0=ny0;if(nx1>x1)x1=nx1;if(ny1>y1)y1=ny1;}
-    if(!n.synthetic&&(n.description!==undefined||levelsEnabled)){
+    if(!n.synthetic&&(n.description!==undefined||layoutPreferences.levelsEnabled)){
       for(const run of n.textBlock.runs){
         x0=Math.min(x0,n.x+run.x-run.left);x1=Math.max(x1,n.x+run.x+Math.max(run.width,run.right));
         y0=Math.min(y0,n.y+run.baseline-run.ascent);y1=Math.max(y1,n.y+run.baseline+run.descent);
@@ -523,20 +565,20 @@ function contentBounds(lay){
   };
   walk(root);
   if(lay.d1Mode==='grid'){x0=Math.min(x0,lay.d1X0);x1=Math.max(x1,lay.d1X1);y0=Math.min(y0,lay.d1BusY);}
-  if(lay.hasDescriptions||levelsEnabled){for(const s of getConnSegments(lay)){x0=Math.min(x0,s.x1-s.lw/2,s.x2-s.lw/2);x1=Math.max(x1,s.x1+s.lw/2,s.x2+s.lw/2);y0=Math.min(y0,s.y1-s.lw/2,s.y2-s.lw/2);y1=Math.max(y1,s.y1+s.lw/2,s.y2+s.lw/2);}}
+  if(lay.hasDescriptions||layoutPreferences.levelsEnabled){for(const s of getConnSegments(lay)){x0=Math.min(x0,s.x1-s.lw/2,s.x2-s.lw/2);x1=Math.max(x1,s.x1+s.lw/2,s.x2+s.lw/2);y0=Math.min(y0,s.y1-s.lw/2,s.y2-s.lw/2);y1=Math.max(y1,s.y1+s.lw/2,s.y2+s.lw/2);}}
   return{x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)};
 }
 
 /* ══ CONNECTION SEGMENTS ══ */
 function getConnSegments(lay){
-  const{root,MD,d1Y,d1Mode,d1BusY,d1ColX,d1Groups,d1Cols,d1X0,d1X1}=lay;
+  const{root,MD,d1Mode,d1BusY,d1ColX,d1Groups,d1Cols,d1X0}=lay;
   const d1=root.children;
   const segs=[];
   const seg=(col,lw,x1,y1,x2,y2)=>segs.push({col,lw,x1,y1,x2,y2});
   const subSegs=p=>{
     if(!p.children.length)return;
     if(p.subtree?.childMode==='horizontal'){
-      const children=p.children,depth=children[0].depth,fs=children[0].fs;
+      const children=p.children,depth=children[0].depth;
       const bottom=p.y+Math.max(p.textBlock.bottom,p.textBlock.runs[0].baseline+p.textBlock.runs[0].descent);
       const inkTop=ch=>ch.y+ch.textBlock.runs[0].baseline-ch.textBlock.runs[0].ascent;
       const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(cgap(depth,MD),gap*0.3);
@@ -1036,7 +1078,7 @@ function setChromeOcclusion(value){
   updateChromeEligibility();
 }
 let viewportInsets={left:0,top:0,right:0,bottom:0},viewportManaged=false,paused=false;
-let pendingRender=false,pendingResize=false,holdDrawing=false,pendingColor=false;
+let pendingRender=false,holdDrawing=false,pendingColor=false;
 let committedRect=null,interruptedFit=false;
 // R12-3: one latest live rectangle; bounds belong to a layout/font identity.
 let liveFrame=null,liveInsets=null,liveViewport=false,fitBounds=new WeakMap();
@@ -1097,9 +1139,9 @@ function applyViewportInsets(value,{duration=0}={}){
 }
 function resizeCanvas(){
   const dpr=devicePixelRatio||1,w=container.clientWidth,h=container.clientHeight;
-  if(paused){pendingResize=true;return false;}
-  if(canvas.width===w*dpr&&canvas.height===h*dpr){pendingResize=false;return false;}
-  pendingResize=false;
+  if(paused){return false;}
+  if(canvas.width===w*dpr&&canvas.height===h*dpr){return false;}
+  
   canvas.style.width=w+'px';canvas.style.height=h+'px';
   canvas.width=w*dpr;canvas.height=h*dpr;
   updateEmptyHint();
@@ -1112,7 +1154,7 @@ function updateEmptyHint(){
   const r=viewportRect();emptyEl.style.left=r.left+'px';emptyEl.style.top=r.top+'px';
   emptyEl.style.width=r.width+'px';emptyEl.style.height=r.height+'px';
 }
-function fitTarget(kbH,effectivePanelW){
+function fitTarget(kbH){
   if(kbH===undefined)kbH=kbLift.h;
   const r=viewportRect(kbH),panW=r.left,aW=r.width,aH=r.height;
   let cb=fitBounds.get(st.lay);
@@ -1240,22 +1282,13 @@ function render(){
   pendingRender=false;
   const text=sourceText;
   const isBlank=!text.trim();
-  if(isBlank)updateBranchBounds(null);
+  if(isBlank)layoutPreferences.observeBlank(sourceReady,sourceStats);
   if(isBlank){
-    if(d1Max!==1||sourceReady&&!wrapBoundsReady){d1Max=1;if(hlimitN>1)hlimitN=1;}if(sourceReady)wrapBoundsReady=true;
     cancelAnimationFrame(_raf);cancelAnimationFrame(kbLift.animId);
     st.lay=null;pendingColor=false;uiState.userTouchedCanvas=false;emptyEl.style.display='flex';draw();return;
   }
   const root=parse(text);if(!root)return;
-  flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts);updateBranchBounds(root);
-  const nd=root.children.length||1;
-  if(!wrapBoundsReady||nd!==d1Max){
-    wrapBoundsReady=true;
-    const prevCap=hlimitCap(d1Max);d1Max=nd;
-    const newCap=hlimitCap(d1Max);
-    if(hlimitInf&&hlimitN===prevCap)hlimitN=newCap;
-    if(hlimitN>newCap)hlimitN=newCap;
-  }
+  flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts);layoutPreferences.observeRoot(root,sourceReady,sourceStats);
   const prevLay=st.lay;
   st.lay=layout(root,uiState.colorSeed);st.lay.hasDescriptions=!!(sourceNodeTexts&&sourceNodeTexts.some(text=>text.includes('\n')));pendingColor=false;emptyEl.style.display='none';
   if(uiState.userTouchedCanvas&&prevLay&&st.lay.MD!==prevLay.MD)preserveViewportAcrossLayoutChange(prevLay,st.lay);
@@ -1282,24 +1315,12 @@ function setText(text,options={}){
   sourceStats=stats;sourceReady=true;
   sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;if(!text.trim())flushRender();else schedRender();
 }
-function getSettingBounds(){return{horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
-function getSettings(){return{horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN},colorSeed:uiState.colorSeed};}
+function getSettingBounds(){return layoutPreferences.getSettingBounds();}
+function getSettings(){return{...layoutPreferences.getSettings(),colorSeed:uiState.colorSeed};}
 function setSettings(partial={}){
   if(destroyed)return getSettings();
   if(!paused&&rtimer!==null)flushRender();
-  const limit=partial.horizontalLimit;
-  if(limit&&typeof limit==='object'){
-    if('enabled' in limit)hlimitInf=!limit.enabled;
-    if(!hlimitInf){const n='count' in limit?Number(limit.count):hlimitN;hlimitN=Math.max(1,Math.min(wrapBoundsReady?hlimitCap(d1Max):Number.MAX_SAFE_INTEGER,Math.round(isNaN(n)?1:n)));}
-  }
-  const deeper=partial.deeperHorizontal,siblings=partial.siblingLimit;
-  const safeCount=(value,min,max,current)=>{const number=Number(value),rounded=Math.round(number);return Number.isFinite(number)&&Number.isSafeInteger(rounded)?clamp(rounded,min,branchBoundsReady?max:Number.MAX_SAFE_INTEGER):current;};
-  if(deeper&&typeof deeper==='object'){if(typeof deeper.enabled==='boolean')levelsEnabled=deeper.enabled;if('levels' in deeper){const next=safeCount(deeper.levels,1,branchDepthMax,levelsN);levelsCountChosen=Number(deeper.levels)!==1;levelsN=next;}}
-  if(siblings&&typeof siblings==='object'){if(typeof siblings.enabled==='boolean')siblingLimitEnabled=siblings.enabled;if('count' in siblings){const next=safeCount(siblings.count,1,branchSiblingMax,siblingLimitN);siblingCountChosen=Number(siblings.count)!==3;siblingLimitN=next;}}
-  // Latest owner policy: activating either layout switches the other off.
-  // If an API/bootstrap request supplies both true, LEVELS wins deterministically.
-  if(deeper&&deeper.enabled===true)hlimitInf=true;
-  else if(limit&&limit.enabled===true)levelsEnabled=false;
+  layoutPreferences.apply(partial);
   if('colorSeed' in partial){const v=String(partial.colorSeed).trim();if(v!=='')uiState.colorSeed=Math.max(0,parseInt(v,10)||0);}
   flushRender();
   if(!paused&&!uiState.userTouchedCanvas&&st.lay&&canvas.clientWidth>0&&canvas.clientHeight>0)animateFit(300);
@@ -1385,7 +1406,7 @@ if(_isTouch){
 })();
 listen(btnRst,'click',()=>{resetView();setTimeout(()=>btnRst.blur(),0);});
 let resizeFrame=null;
-const observer=new ResizeObserver(guarded(()=>{if(paused){pendingResize=true;return;}cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;if(viewportManaged){setViewportInsets(liveInsets||viewportInsets,{duration:200,live:liveViewport});return;}resizeCanvas();});}));
+const observer=new ResizeObserver(guarded(()=>{if(paused){return;}cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{resizeFrame=null;if(viewportManaged){setViewportInsets(liveInsets||viewportInsets,{duration:200,live:liveViewport});return;}resizeCanvas();});}));
 observer.observe(container);
 let fontGeneration=0;
 function loadFonts(){
@@ -1408,12 +1429,12 @@ function destroy(){
   timers.forEach(id=>window.clearTimeout(id));frames.forEach(id=>window.cancelAnimationFrame(id));
   objectURLs.forEach(url=>URL.revokeObjectURL(url));objectURLs.clear();
   style.remove();owned.remove();if(ownsFont)fontLink.remove();
-  container.removeAttribute('aria-busy');container.classList.remove('chrome-managed');if(!hadClass)container.classList.remove('moa-mindmap');
+  container.removeAttribute('aria-busy');container.classList.remove('chrome-managed');container.classList.toggle('map-covered',hadCoveredClass);if(!hadClass)container.classList.remove('moa-mindmap');
 }
 resizeCanvas();render();
 if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed};
 }
-window.MindMap={version:'1.7.6',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1'],mount};
+window.MindMap={version:'1.7.7',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1'],mount};
 })();

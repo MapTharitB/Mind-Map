@@ -1,4 +1,4 @@
-/* Outliner version 1.7.4 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.7.5 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 const originalHeader = String.raw`<!-- OUTLINER (WorkFlowy style outliner) - one self-contained file. READ THIS BEFORE EDITING.
      Every REQUIREMENT comment records something the owner explicitly asked for.
@@ -237,6 +237,54 @@ const template = String.raw`<div class="page">
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
+function encodeNodeText(text, depth) {
+  const lines = text.split('\n'), prefix = '  '.repeat(depth), out = [prefix + '- ' + lines.shift()];
+  if (lines.length) {
+    const bodyPrefix = prefix + '  ';
+    out.push(bodyPrefix + '[desc]');
+    lines.forEach(line => out.push(bodyPrefix + (/^\\/.test(line) || line === '[desc]' || line === '[/desc]' ? '\\' : '') + line));
+    out.push(bodyPrefix + '[/desc]');
+  }
+  return out.join('\n');
+}
+function decodeDescriptionOutline(text) {
+  const reject = { recognized: false }, raw = text.replace(/\r\n/g, '\n').split('\n');
+  if (!raw.length || raw.some(line => /\r/.test(line) || /^[ ]*\t/.test(line))) return reject;
+  const common = Math.min(...raw.filter(line => line.length).map(line => line.match(/^ */)[0].length));
+  if (!Number.isFinite(common) || common % 2) return reject;
+  const lines = raw.map(line => line.slice(common)), items = [], stack = [];
+  let owner = null, ownerDepth = -1, mayDescribe = false, recognized = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i], match = /^( *)(- )(.*)$/.exec(line);
+    if (match) {
+      const depth = match[1].length / 2;
+      if (!Number.isInteger(depth) || depth > stack.length) return reject;
+      owner = { text: match[3], children: [] }; ownerDepth = depth;
+      if (depth === 0) items.push(owner); else stack[depth - 1].children.push(owner);
+      stack.length = depth; stack.push(owner); mayDescribe = true; continue;
+    }
+    const prefix = '  '.repeat(ownerDepth + 1);
+    if (!owner || !mayDescribe || line !== prefix + '[desc]') return reject;
+    const body = []; let closed = false;
+    while (++i < lines.length) {
+      if (!lines[i].startsWith(prefix)) return reject;
+      let payload = lines[i].slice(prefix.length);
+      if (payload === '[/desc]') { closed = true; break; }
+      if (payload === '[desc]') return reject;
+      if (payload[0] === '\\' && (payload[1] === '\\' || payload.slice(1) === '[desc]' || payload.slice(1) === '[/desc]')) payload = payload.slice(1);
+      body.push(payload);
+    }
+    if (!closed || !body.length) return reject;
+    owner.text += '\n' + body.join('\n'); mayDescribe = false; recognized = true;
+  }
+  return recognized ? { recognized: true, items } : reject;
+}
+
+function splitNodeText(text) {
+  const at = text.indexOf('\n');
+  return at < 0 ? { title: text, description: '', hasDescription: false } : { title: text.slice(0, at), description: text.slice(at + 1), hasDescription: true };
+}
+function joinNodeText(parts) { return parts.title + (parts.hasDescription ? '\n' + parts.description : ''); }
 function mount(container, opts = {}) {
 if (!(container instanceof Element)) throw new TypeError('Outliner.mount requires an Element');
 // Owner-approved iPad Safari exception. Identity is best-effort, never a viewport/pointer gate.
@@ -494,6 +542,7 @@ const KEY = 'outliner-v1';
 let root, zoom, par = new Map();
 let saveBlocked = false, blockedTree = null;
 
+function updateUidFromTree(n) { uid = Math.max(uid, n.id); n.children.forEach(updateUidFromTree); return n; }
 function load() {
   try {
     const s = localStorage.getItem(KEY);
@@ -507,8 +556,7 @@ function load() {
         if (!n || !Number.isSafeInteger(n.id) || ids.has(n.id) || typeof n.text !== 'string' || typeof n.open !== 'boolean' || !Array.isArray(n.children)) throw new Error('Invalid outline');
         ids.add(n.id); for (const child of n.children) stack.push(child);
       }
-      const fix = n => { uid = Math.max(uid, n.id); n.children.forEach(fix); return n; };
-      root = fix(d.root);
+      root = updateUidFromTree(d.root);
       zoom = find(root, d.zoom) || root;
       return;
     }
@@ -605,10 +653,9 @@ function restore(i) {
   const d = JSON.parse(hist[i]);
   const viewOnly = d.zoom !== zoom.id && historyRootEqual(snap(), hist[i]);
   if (viewOnly) blurOutlineText();
-  const fix = n => { uid = Math.max(uid, n.id); n.children.forEach(fix); return n; };
   // Search state is keyed by node objects, and undo/redo rebuilds every node: carry it over by id so bullets typed during a search stay visible.
   const keepIds = [...sKeep].map(n => n.id), overIds = [...sOver].map(([n, v]) => [n.id, v]);
-  root = fix(d.root); zoom = find(root, d.zoom) || root; sel.clear();
+  root = updateUidFromTree(d.root); zoom = find(root, d.zoom) || root; sel.clear();
   sKeep.clear(); keepIds.forEach(id => { const n = find(root, id); if (n) sKeep.add(n); });
   sOver.clear(); overIds.forEach(([id, v]) => { const n = find(root, id); if (n) sOver.set(n, v); });
   const a = viewOnly || ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement(); render(a && a.dataset && a.dataset.id ? +a.dataset.id : null);
@@ -639,49 +686,6 @@ function parseOutline(text) {
 }
 
 // V1.1 description interchange: validate the complete document before allocating IDs.
-function encodeNodeText(text, depth) {
-  const lines = text.split('\n'), prefix = '  '.repeat(depth), out = [prefix + '- ' + lines.shift()];
-  if (lines.length) {
-    const bodyPrefix = prefix + '  ';
-    out.push(bodyPrefix + '[desc]');
-    lines.forEach(line => out.push(bodyPrefix + (/^\\/.test(line) || line === '[desc]' || line === '[/desc]' ? '\\' : '') + line));
-    out.push(bodyPrefix + '[/desc]');
-  }
-  return out.join('\n');
-}
-function decodeDescriptionOutline(text) {
-  const reject = { recognized: false }, raw = text.replace(/\r\n/g, '\n').split('\n');
-  if (!raw.length || raw.some(line => /\r/.test(line) || /^[ ]*\t/.test(line))) return reject;
-  const common = Math.min(...raw.filter(line => line.length).map(line => line.match(/^ */)[0].length));
-  if (!Number.isFinite(common) || common % 2) return reject;
-  const lines = raw.map(line => line.slice(common)), items = [], stack = [];
-  let owner = null, ownerDepth = -1, mayDescribe = false, recognized = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i], match = /^( *)(- )(.*)$/.exec(line);
-    if (match) {
-      const depth = match[1].length / 2;
-      if (!Number.isInteger(depth) || depth > stack.length) return reject;
-      owner = { text: match[3], children: [] }; ownerDepth = depth;
-      if (depth === 0) items.push(owner); else stack[depth - 1].children.push(owner);
-      stack.length = depth; stack.push(owner); mayDescribe = true; continue;
-    }
-    const prefix = '  '.repeat(ownerDepth + 1);
-    if (!owner || !mayDescribe || line !== prefix + '[desc]') return reject;
-    const body = []; let closed = false;
-    while (++i < lines.length) {
-      if (!lines[i].startsWith(prefix)) return reject;
-      let payload = lines[i].slice(prefix.length);
-      if (payload === '[/desc]') { closed = true; break; }
-      if (payload === '[desc]') return reject;
-      if (payload[0] === '\\' && (payload[1] === '\\' || payload.slice(1) === '[desc]' || payload.slice(1) === '[/desc]')) payload = payload.slice(1);
-      body.push(payload);
-    }
-    if (!closed || !body.length) return reject;
-    owner.text += '\n' + body.join('\n'); mayDescribe = false; recognized = true;
-  }
-  return recognized ? { recognized: true, items } : reject;
-}
-
 function buildPar(n) { n.children.forEach(c => { par.set(c, n); buildPar(c); }); }
 // Search state. While a search is active the outline is a filtered, temporary view: n.open is never touched there,
 // so ending the search brings back the real expand/collapse state exactly as it was.
@@ -705,11 +709,6 @@ function shownKids(n) {
 function vis() { const o = []; (function w(n) { for (const c of shownKids(n)) { o.push(c); w(c); } })(zoom); return o; }
 const esc = x => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Backdrop markup for the textarea: same text, transparent, with the matches wrapped in <mark>. The trailing newline keeps a last empty line's height.
-function markHtml(text) {
-  const ql = sq.toLowerCase(), tl = text.toLowerCase(); let out = '', i = 0, j;
-  while ((j = tl.indexOf(ql, i)) > -1) { out += esc(text.slice(i, j)) + '<mark>' + esc(text.slice(j, j + ql.length)) + '</mark>'; i = j + ql.length; }
-  return out + esc(text.slice(i)) + '\n';
-}
 const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
 // Height is measured before the web font loads, so it is re-measured once fonts are ready (see the end of the script).
 // scrollTop is reset because a leftover internal scroll offset shifts the caret upward and clips it on an empty bullet.
@@ -735,11 +734,6 @@ function levelStyle(lvl) {
 const setLevel = (e, lvl) => Object.entries(levelStyle(lvl)).forEach(([k, v]) => e.style.setProperty(k, v));
 
 // Shared row/head editor binding. Canonical offsets never depend on the active field.
-function splitNodeText(text) {
-  const at = text.indexOf('\n');
-  return at < 0 ? { title: text, description: '', hasDescription: false } : { title: text.slice(0, at), description: text.slice(at + 1), hasDescription: true };
-}
-function joinNodeText(parts) { return parts.title + (parts.hasDescription ? '\n' + parts.description : ''); }
 function readEditorRange(n, textarea) {
   const role = textarea.dataset.role || 'title', offset = role === 'description' ? splitNodeText(n.text).title.length + 1 : 0;
   return { text: n.text, value: n.text, start: offset + textarea.selectionStart, end: offset + textarea.selectionEnd,
@@ -806,7 +800,7 @@ function bindField(binding, t) {
       const c = t.selectionStart; t.value = t.value.slice(0, c - 1) + t.value.slice(c); t.setSelectionRange(c - 1, c - 1);
       const n = writeField(); if (binding.head) { refreshNodeEditor(binding); crumbs(); save(true); toFirst(); } else enter(n, readEditorRange(n, t)); return;
     }
-    const before = splitNodeText(binding.getNode().text), role = t.dataset.role, local = t.selectionStart, n = writeField();
+    const role = t.dataset.role, local = t.selectionStart, n = writeField();
     if (composing || e.isComposing || historyComposing) { fit(t); save(true); return; }
     const hasNewTitleLF = role === 'title' && t.value.includes('\n');
     refreshNodeEditor(binding);
@@ -1531,5 +1525,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory };
 }
-window.Outliner = { version: '1.7.4', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history'], mount };
+window.Outliner = { version: '1.7.5', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history'], mount };
 })();

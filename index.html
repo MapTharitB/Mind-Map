@@ -148,8 +148,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.7.4' },
-  mindmap: { src: './mindmap.js', v: '1.7.6' }
+  outliner: { src: './outliner.js', v: '1.7.5' },
+  mindmap: { src: './mindmap.js', v: '1.7.7' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus) {
@@ -221,10 +221,11 @@ new ResizeObserver(()=>measureBrand()).observe(headerContent);
 document.fonts?.ready.then(()=>measureBrand(true));
 document.fonts?.addEventListener('loadingdone',()=>measureBrand(true));
 const errors=new Map();
+function errorText(error) {return error?.message || String(error);}
 function report(area, error) {
   let row=errors.get(area);
   if (!row) {row=document.createElement('p');errors.set(area,row);$('errors').appendChild(row);}
-  row.textContent=area+': '+(error && error.message || String(error));
+  row.textContent=area+': '+errorText(error);
 }
 function read(key, fallback, valid) {
   try {const raw=localStorage.getItem(key);if(raw===null)return fallback;const value=JSON.parse(raw);return valid(value)?value:fallback;} catch (_) {return fallback;}
@@ -238,19 +239,19 @@ function write(key, value) {
 const bool=v=>typeof v==='boolean', positive=v=>Number.isFinite(v)&&v>0;
 let syncCollapse=read('moa:syncCollapse',true,bool), syncFocus=read('moa:syncFocus',true,bool);
 // R12 shared floors are independent of the panel; panel has input priority.
-const O=346, PANEL_W=310, DIVIDER_W=44, M=346, MIN_SPLIT_W=692, DEFAULT_FRACTION=.35;
+const O=346, M=346, MIN_SPLIT_W=692, DEFAULT_FRACTION=.35;
 const DRAG_SLOP=4, RELEASE_FRAC=.42;
 let mode='split', fraction=read('moa:paneWidth',DEFAULT_FRACTION,positive), legacyPixels=fraction>1?fraction:null;
 if(legacyPixels!==null)fraction=DEFAULT_FRACTION;
 let W=0,H=0,narrowPortrait=false,covered=false,paneControls=false;
-let transitionTimer=null,layoutFrame=null,geometryGeneration=0;
+let layoutFrame=null,geometryGeneration=0;
 let widthFrame=null,drag=null,lastTap=null,geometryTarget=null,viewportLeft=0,suppressDoubleClickUntil=0;
 let settings={horizontalLimit:{enabled:read('moa:map:hlimitEnabled',false,bool),count:read('moa:map:hlimitCount',3,v=>Number.isInteger(v)&&v>0)},deeperHorizontal:{enabled:read('moa:map:deeperEnabled',false,bool),levels:read('moa:map:deeperLevels',1,v=>Number.isSafeInteger(v)&&v>=1)},siblingLimit:{enabled:read('moa:map:siblingLimitEnabled',true,bool),count:read('moa:map:siblingLimitCount',3,v=>Number.isSafeInteger(v)&&v>=1)},colorSeed:read('moa:map:colorSeed',0,v=>Number.isInteger(v)&&v>=0)};
 let outline=null, map=null, mapModule=null, dirty=true, lastProjection=null, syncFrame=null, settingsTimer=null, settingsPending=true;
 const mapVisible=()=>!covered && W>0 && H>0;
 function supports(cap, method) {return !!(map && mapModule.capabilities.includes(cap) && typeof map[method]==='function');}
 function mapCall(method, ...args) {
-  const failure=error=>{report('Mind Map',new Error((method==='exportPDF'?'PDF export':method)+' failed: '+(error.message||error)));};
+  const failure=error=>{report('Mind Map',new Error((method==='exportPDF'?'PDF export':method)+' failed: '+errorText(error)));};
   try {
     const result=map[method](...args);
     if(result && typeof result.then==='function')return Promise.resolve(result).catch(error=>{failure(error);return undefined;});
@@ -258,24 +259,26 @@ function mapCall(method, ...args) {
   } catch(error) {failure(error);return undefined;}
 }
 // R12-4B: the host owns only scalar Seed state/drafts, never outline snapshots.
-let historyEnabled=false,historyDisposed=false,historyContext=false,seedComposing=false,seedBlurPending=false,blockedHistoryAction=null;
-let seedGeneration=0,historyLifetime=0,seedDirty=false,seedDeliveryQueued=false,seedInFlight=false;
-const historyListeners=[],composingFields=new Set();
-function seedRaw(){try{return{known:true,raw:localStorage.getItem('moa:map:colorSeed')};}catch(_){return{known:false,raw:null};}}
-let committedSeed={seed:settings.colorSeed,display:String(settings.colorSeed),storage:seedRaw()};
-function historyListen(target,type,fn,options){target.addEventListener(type,fn,options);historyListeners.push(()=>target.removeEventListener(type,fn,options));}
-function nativeHistoryField(node){return node instanceof Element&&(!!node.closest('input,textarea,select')||node.isContentEditable);}
 function historyStorageFailure(){
   if(outline&&window.Outliner.capabilities.includes('storage-feedback')&&typeof outline.reportSaveFailure==='function')outline.reportSaveFailure();
   else report('Storage','Settings could not be saved. Editing remains available in memory.');
 }
+function createSeedHistoryController(deps){
+  const {seedInput,seedDown,seedUp,outlineHost,workspace,getOutline,getMap,supports,setSeed,reportError,reportStorageFailure:historyStorageFailure,initialSeed}=deps;
+let historyEnabled=false,historyDisposed=false,historyContext=false,seedComposing=false,seedBlurPending=false,blockedHistoryAction=null;
+let seedGeneration=0,historyLifetime=0,seedDirty=false,seedDeliveryQueued=false,seedInFlight=false;
+const historyListeners=[],composingFields=new Set();
+function seedRaw(){try{return{known:true,raw:localStorage.getItem('moa:map:colorSeed')};}catch(_){return{known:false,raw:null};}}
+let committedSeed={seed:initialSeed,display:String(initialSeed),storage:seedRaw()};
+function historyListen(target,type,fn,options){target.addEventListener(type,fn,options);historyListeners.push(()=>target.removeEventListener(type,fn,options));}
+function nativeHistoryField(node){return node instanceof Element&&(!!node.closest('input,textarea,select')||node.isContentEditable);}
 function applySeedState(value){
   if(historyDisposed||!value||!Number.isInteger(value.seed)||value.seed<0||value.display!==String(value.seed)||typeof value.storage?.known!=='boolean'||value.storage.raw!==null&&typeof value.storage.raw!=='string')return false;
   committedSeed={seed:value.seed,display:value.display,storage:{...value.storage}};
-  settings={...settings,colorSeed:value.seed};
-  if($('color-seed').value!==value.display)$('color-seed').value=value.display;
+  setSeed(value.seed);
+  if(seedInput.value!==value.display)seedInput.value=value.display;
   if(value.storage.known){try{if(value.storage.raw===null)localStorage.removeItem('moa:map:colorSeed');else localStorage.setItem('moa:map:colorSeed',value.storage.raw);}catch(_){historyStorageFailure();}}
-  seedGeneration++;seedDirty=true;$('seed-down').disabled=value.seed<=0;$('seed-up').disabled=value.seed>=16777215;queueSeedDelivery();return true;
+  seedGeneration++;seedDirty=true;seedDown.disabled=value.seed<=0;seedUp.disabled=value.seed>=16777215;queueSeedDelivery();return true;
 }
 function queueSeedDelivery(){
   if(historyDisposed||seedDeliveryQueued)return;
@@ -283,30 +286,30 @@ function queueSeedDelivery(){
 }
 function deliverSeed(){
   if(historyDisposed||!historyEnabled||!seedDirty||seedInFlight||!supports('color-seed-only','setColorSeed'))return;
-  const generation=seedGeneration,lifetime=historyLifetime,instance=map;seedInFlight=true;
-  const settle=error=>{
-    if(historyDisposed||lifetime!==historyLifetime||instance!==map)return;
+  const generation=seedGeneration,lifetime=historyLifetime,instance=getMap();seedInFlight=true;
+  const settle=(success,error)=>{
+    if(historyDisposed||lifetime!==historyLifetime||instance!==getMap())return;
     seedInFlight=false;
-    if(error){seedDirty=true;if(generation===seedGeneration)report('Mind Map',new Error('setColorSeed failed: '+(error.message||error)));}
+    if(!success){seedDirty=true;if(generation===seedGeneration)reportError(new Error('setColorSeed failed: '+errorText(error)));}
     else if(generation===seedGeneration)seedDirty=false;
     if(generation!==seedGeneration)queueSeedDelivery();
   };
-  try{const result=instance.setColorSeed(committedSeed.seed);if(result&&typeof result.then==='function')Promise.resolve(result).then(()=>settle(),settle);else settle();}catch(error){settle(error);}
+  try{const result=instance.setColorSeed(committedSeed.seed);if(result&&typeof result.then==='function')Promise.resolve(result).then(()=>settle(true),error=>settle(false,error));else settle(true);}catch(error){settle(false,error);}
 }
 function commitSeed(seed,force=false){
   if(!historyEnabled||historyDisposed||seedComposing||composingFields.size||!Number.isInteger(seed)||seed<0)return false;
-  if(!force&&seed===committedSeed.seed){if($('color-seed').value!==committedSeed.display)$('color-seed').value=committedSeed.display;return false;}
+  if(!force&&seed===committedSeed.seed){if(seedInput.value!==committedSeed.display)seedInput.value=committedSeed.display;return false;}
   const before={...committedSeed,storage:seedRaw()},after={seed,display:String(seed),storage:{known:true,raw:JSON.stringify(seed)}};
-  return outline.commitHostHistory({before,after,force});
+  return getOutline().commitHostHistory({before,after,force});
 }
 function settleSeedDraft(){
   if(seedComposing||composingFields.size)return false;
-  const text=$('color-seed').value.trim(),number=Number(text);
+  const text=seedInput.value.trim(),number=Number(text);
   if(text===committedSeed.display)return true;
-  if(!text||!Number.isFinite(number)){if($('color-seed').value!==committedSeed.display)$('color-seed').value=committedSeed.display;return true;}
+  if(!text||!Number.isFinite(number)){if(seedInput.value!==committedSeed.display)seedInput.value=committedSeed.display;return true;}
   const seed=Math.max(0,Math.min(16777215,Math.round(number)));
   if(seed!==committedSeed.seed)return commitSeed(seed);
-  if($('color-seed').value!==committedSeed.display)$('color-seed').value=committedSeed.display;
+  if(seedInput.value!==committedSeed.display)seedInput.value=committedSeed.display;
   return true;
 }
 function disposeHistoryHost(){
@@ -324,9 +327,9 @@ function makeHistoryHost(){
   };
   historyListen(document,'pointerdown',interaction,{capture:true,passive:true});
   historyListen(document,'focusin',interaction,true);
-  historyListen(document,'compositionstart',event=>{composingFields.add(event.target);if(event.target===$('color-seed'))seedComposing=true;},true);
+  historyListen(document,'compositionstart',event=>{composingFields.add(event.target);if(event.target===seedInput)seedComposing=true;},true);
   historyListen(document,'compositionend',event=>{
-    composingFields.delete(event.target);if(event.target===$('color-seed')){seedComposing=false;if(seedBlurPending){seedBlurPending=false;queueMicrotask(()=>{if(!historyDisposed&&document.activeElement!==$('color-seed'))settleSeedDraft();});}}
+    composingFields.delete(event.target);if(event.target===seedInput){seedComposing=false;if(seedBlurPending){seedBlurPending=false;queueMicrotask(()=>{if(!historyDisposed&&document.activeElement!==seedInput)settleSeedDraft();});}}
   },true);
   const actionStart=event=>{
     const button=event.target.closest?.('#seed-down,#seed-up,#random-color,#ol-undoBtn,#ol-redoBtn');
@@ -335,20 +338,39 @@ function makeHistoryHost(){
   historyListen(document,'pointerdown',actionStart,{capture:true,passive:true});
   historyListen(document,'keydown',event=>{if(event.key==='Enter'||event.key===' '||event.keyCode===229)actionStart(event);},true);
   historyListen(document,'click',event=>{const button=event.target.closest?.('button');if(button&&button===blockedHistoryAction){event.preventDefault();event.stopImmediatePropagation();blockedHistoryAction=null;}},true);
-  historyListen($('color-seed'),'blur',()=>{if(!historyEnabled)return;if(seedComposing){seedBlurPending=true;return;}settleSeedDraft();});
+  historyListen(seedInput,'blur',()=>{if(!historyEnabled)return;if(seedComposing){seedBlurPending=true;return;}settleSeedDraft();});
   return{
     beforeCommand:()=>!historyDisposed&&!composingFields.size&&!blockedHistoryAction&&settleSeedDraft(),
     apply:applySeedState,
     ownsKey:()=>!historyDisposed&&!composingFields.size&&historyContext
   };
 }
+return {
+  makeHost:makeHistoryHost,
+  enable(value){historyEnabled=value;},
+  dispose:disposeHistoryHost,
+  commitSeed,settleSeedDraft,queueSeedDelivery,
+  markDirty(){seedDirty=true;},
+  get enabled(){return historyEnabled;},
+  get dirty(){return seedDirty;},
+  get composing(){return !!(seedComposing||composingFields.size);},
+  get seed(){return committedSeed.seed;},
+  get display(){return committedSeed.display;}
+};
+}
+const seedHistory=createSeedHistoryController({
+  seedInput:$('color-seed'),seedDown:$('seed-down'),seedUp:$('seed-up'),outlineHost,workspace,
+  getOutline:()=>outline,getMap:()=>map,supports,
+  setSeed:seed=>{settings={...settings,colorSeed:seed};},
+  reportError:error=>report('Mind Map',error),reportStorageFailure:historyStorageFailure,initialSeed:settings.colorSeed
+});
 function persistSettings(value) {
   if(!value)return;
   if(!value.horizontalLimit || typeof value.horizontalLimit.enabled!=='boolean' || !Number.isInteger(value.horizontalLimit.count) || value.horizontalLimit.count<1 || !Number.isInteger(value.colorSeed) || value.colorSeed<0){report('Mind Map','Settings API returned invalid data');return;}
-  settings=historyEnabled?{...value,colorSeed:committedSeed.seed}:value;
+  settings=seedHistory.enabled?{...value,colorSeed:seedHistory.seed}:value;
   write('moa:map:hlimitEnabled',settings.horizontalLimit.enabled);
   write('moa:map:hlimitCount',settings.horizontalLimit.count);
-  if(!historyEnabled)write('moa:map:colorSeed',settings.colorSeed);
+  if(!seedHistory.enabled)write('moa:map:colorSeed',settings.colorSeed);
   const branch=supports('branch-layout-v1','getSettings')&&settings.deeperHorizontal&&settings.siblingLimit;
   const deeper=!!(branch&&settings.deeperHorizontal.enabled);
   $('hlimit-enabled').checked=settings.horizontalLimit.enabled;
@@ -364,12 +386,12 @@ function persistSettings(value) {
     $('sibling-count').value=settings.siblingLimit.count;$('sibling-count').disabled=!deeper||!settings.siblingLimit.enabled;
   }
   $('hlimit-count').value=settings.horizontalLimit.count;
-  if(!historyEnabled)$('color-seed').value=settings.colorSeed;
+  if(!seedHistory.enabled)$('color-seed').value=settings.colorSeed;
   updateSettingButtons();
 }
-function refreshSettings() {if(supports('settings-v1','getSettings'))persistSettings(mapCall('getSettings'));if(historyEnabled&&seedDirty)queueSeedDelivery();}
+function refreshSettings() {if(supports('settings-v1','getSettings'))persistSettings(mapCall('getSettings'));if(seedHistory.enabled&&seedHistory.dirty)seedHistory.queueSeedDelivery();}
 function flushSync(revealing=false) {
-  if(historyEnabled&&seedDirty)queueSeedDelivery();
+  if(seedHistory.enabled&&seedHistory.dirty)seedHistory.queueSeedDelivery();
   if(!dirty || !outline || !supports('text-input','setText') || !mapVisible()&&!revealing)return;
   try {
     const projection=projectOutline(outline.getSnapshot(),syncCollapse,syncFocus);
@@ -402,7 +424,6 @@ function syncButtons() {
   $('sync-collapse').setAttribute('aria-pressed',String(syncCollapse));
   $('sync-focus').setAttribute('aria-pressed',String(syncFocus));
 }
-function availableWidth() {return W;}
 function clampWidth(value) {return Math.max(O,Math.min(W-M,value));}
 function defaultWidth() {return clampWidth(W*DEFAULT_FRACTION);}
 function splitWidth() {return clampWidth(fraction*W);}
@@ -461,7 +482,6 @@ function commitViewport(left,duration,live=false) {
   viewportLeft=left;
   if(supports('viewport-insets','setViewportInsets'))mapCall('setViewportInsets',{left,top:0,right:0,bottom:0},{duration,live:live&&supports('live-viewport-fit','setViewportInsets')});
 }
-function showMapControls(){updateControlPlacement();}
 function layout(duration=0,easing='ease',commit=true) {
   if(W<=0||H<=0)return;
   narrowPortrait=W<MIN_SPLIT_W;
@@ -519,7 +539,7 @@ function displayedGeometry(){
 }
 function interruptGeometry(){
   const current=displayedGeometry();
-  cancelAnimationFrame(widthFrame);widthFrame=null;clearTimeout(transitionTimer);transitionTimer=null;
+  cancelAnimationFrame(widthFrame);widthFrame=null;
   ++geometryGeneration;geometryTarget=null;
   outlineHost.style.transition='none';divider.style.transition='none';
   applyGeometry(current.width,current.left);
@@ -593,7 +613,7 @@ divider.addEventListener('pointerdown',event=>{
   const panel=$('map-options'),pr=panel.getBoundingClientRect();
   if(!panel.hidden&&event.clientX>=pr.left&&event.clientX<=pr.right&&event.clientY>=pr.top&&event.clientY<=pr.bottom)return;
   event.preventDefault();
-  const resume=geometryTarget?{...geometryTarget}:transitionTimer?{r:splitWidth(),mode,duration:200}:null;
+  const resume=geometryTarget?{...geometryTarget}:null;
   const current=interruptGeometry();
   // Repeating the committed rectangle cancels an older fit without computing a new target.
   commitViewport(viewportLeft,0);
@@ -664,37 +684,39 @@ const layoutNumbers={
   'deeper-levels':{key:'deeperHorizontal',field:'levels',down:'levels-down',up:'levels-up'},
   'sibling-count':{key:'siblingLimit',field:'count',down:'limit-down',up:'limit-up'}
 };
+function readSettingBounds(key){
+  const capability=key==='horizontalLimit'?'settings-bounds':'branch-layout-v1';
+  if(!supports(capability,'getSettingBounds'))return null;
+  const value=mapCall('getSettingBounds'),bound=value&&value[key];
+  if(key==='horizontalLimit'&&!(Number.isInteger(bound?.max)&&bound.max>=1))return null;
+  return bound||null;
+}
 function settingBounds(){
-  if(supports('settings-bounds','getSettingBounds')){
-    const value=mapCall('getSettingBounds');
-    if(value&&Number.isInteger(value.horizontalLimit?.max)&&value.horizontalLimit.max>=1)return value.horizontalLimit;
-  }
-  return {min:1,max:Infinity}; // Older modules enforce their own cap through setSettings.
+  return readSettingBounds('horizontalLimit')||{min:1,max:Infinity}; // Older modules enforce their own cap through setSettings.
 }
 function updateSettingButtons(){
   const bounds=settingBounds(),count=settings.horizontalLimit.count,off=!settings.horizontalLimit.enabled,seed=settings.colorSeed;
   $('hlimit-count').max=Number.isFinite(bounds.max)?bounds.max:'';
   $('wrap-down').disabled=off||$('hlimit-count').disabled||count<=1;$('wrap-up').disabled=off||$('hlimit-count').disabled||count>=bounds.max;
-  const all=supports('branch-layout-v1','getSettingBounds')?mapCall('getSettingBounds'):null;
   for(const [id,row] of Object.entries(layoutNumbers)){
     if(id==='hlimit-count')continue;
-    const input=$(id),bound=all&&all[row.key],value=settings[row.key]?.[row.field];
+    const input=$(id),bound=readSettingBounds(row.key),value=settings[row.key]?.[row.field];
     input.max=bound?bound.max:'';$(row.down).disabled=input.disabled||!bound||value<=bound.min;$(row.up).disabled=input.disabled||!bound||value>=bound.max;
   }
   $('seed-down').disabled=seed<=0;$('seed-up').disabled=seed>=16777215;
 }
 function commitNumber(id,delta=0){
-  if(historyEnabled&&id==='color-seed'){
-    if(seedComposing||composingFields.size)return;
+  if(seedHistory.enabled&&id==='color-seed'){
+    if(seedHistory.composing)return;
     const text=$('color-seed').value.trim(),number=Number(text);
-    if(!text||!Number.isFinite(number)){settleSeedDraft();return;}
-    commitSeed(Math.max(0,Math.min(16777215,Math.round(number)+delta)));return;
+    if(!text||!Number.isFinite(number)){seedHistory.settleSeedDraft();return;}
+    seedHistory.commitSeed(Math.max(0,Math.min(16777215,Math.round(number)+delta)));return;
   }
   const input=$(id);if(input.disabled)return;
   const value=input.value.trim(),number=Number(value),row=layoutNumbers[id];
   if(row){
     if(!value||!Number.isFinite(number)||!Number.isSafeInteger(Math.round(number))){refreshSettings();return;}
-    const all=mapCall('getSettingBounds'),bound=all&&all[row.key]||{min:1,max:Infinity};
+    const bound=readSettingBounds(row.key)||{min:1,max:Infinity};
     const next=Math.max(bound.min,Math.min(bound.max,Math.round(number)+delta));
     changeSettings({[row.key]:{[row.field]:next}});return;
   }
@@ -709,7 +731,7 @@ for(const id of [...Object.keys(layoutNumbers),'color-seed']){
 }
 for(const [id,input,delta]of [...Object.entries(layoutNumbers).flatMap(([input,row])=>[[row.down,input,-1],[row.up,input,1]]),['seed-down','color-seed',-1],['seed-up','color-seed',1]])$(id).addEventListener('click',()=>commitNumber(input,delta));
 $('random-color').addEventListener('click',()=>{
-  if(historyEnabled){if(!settleSeedDraft())return;commitSeed(Math.floor(Math.random()*0xFFFFFF),true);}
+  if(seedHistory.enabled){if(!seedHistory.settleSeedDraft())return;seedHistory.commitSeed(Math.floor(Math.random()*0xFFFFFF),true);}
   else changeSettings({colorSeed:Math.floor(Math.random()*0xFFFFFF)});
 });
 $('download-pdf').addEventListener('click',async()=>{
@@ -747,28 +769,28 @@ async function start() {
     const wantsHeader=wantsPaneControls&&module.capabilities.includes('header-content');
     headerContent.hidden=!wantsHeader;
     const wantsHistory=module.capabilities.includes('host-history');
-    const historyOptions=wantsHistory?{historyHost:makeHistoryHost()}:{};
+    const historyOptions=wantsHistory?{historyHost:seedHistory.makeHost()}:{};
     outline=module.mount(outlineHost,{...historyOptions,...(wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{})});
     if(wantsPaneControls&&outline&&typeof outline.setPaneMode!=='function'&&typeof outline.destroy==='function'){
       outline.destroy();headerContent.hidden=true;workspace.append(headerContent);outline=module.mount(outlineHost,historyOptions);
     }
     if(!outline || typeof outline.getSnapshot!=='function' || typeof outline.on!=='function' || !['snapshot-v1','change-event','toggle-event','zoom-event'].every(cap=>module.capabilities.includes(cap)))throw new Error('Outliner live sync contract is incomplete');
-    historyEnabled=wantsHistory&&typeof outline.commitHostHistory==='function'&&typeof outline.runHistory==='function';
-    if(wantsHistory&&!historyEnabled){
-      outline.destroy();disposeHistoryHost();
+    seedHistory.enable(wantsHistory&&typeof outline.commitHostHistory==='function'&&typeof outline.runHistory==='function');
+    if(wantsHistory&&!seedHistory.enabled){
+      outline.destroy();seedHistory.dispose();
       outline=module.mount(outlineHost,wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{});
     }
-    if(historyEnabled){$('color-seed').value=committedSeed.display;const destroy=outline.destroy;outline.destroy=()=>{disposeHistoryHost();destroy();};}
+    if(seedHistory.enabled){$('color-seed').value=seedHistory.display;const destroy=outline.destroy;outline.destroy=()=>{seedHistory.dispose();destroy();};}
     ['change','toggle','zoom'].forEach(event=>outline.on(event,scheduleSync));
     paneControls=module.capabilities.includes('pane-controls')&&typeof outline.setPaneMode==='function';
     if(paneControls)outline.on('paneAction',({action})=>{if(action==='toggle')toggleSidebar();else if(action==='expand'&&!narrowPortrait)selectPane(mode==='full'?'split':'full');});
     layout();scheduleSync();
-  } catch(error) {if(!historyEnabled)disposeHistoryHost();report('Outliner',new Error('Outliner could not load; editing is unavailable or live sync could not start. '+error.message));if(!outline){mode='collapsed';layout();}}
+  } catch(error) {if(!seedHistory.enabled)seedHistory.dispose();report('Outliner',new Error('Outliner could not load; editing is unavailable or live sync could not start. '+error.message));if(!outline){mode='collapsed';layout();}}
   try {
-    mapModule=await loadModule('mindmap','MindMap');map=mapModule.mount($('map-host'),{onError:error=>{dirty=true;if(historyEnabled)seedDirty=true;report('Mind Map',error);}});
+    mapModule=await loadModule('mindmap','MindMap');map=mapModule.mount($('map-host'),{onError:error=>{dirty=true;if(seedHistory.enabled)seedHistory.markDirty();report('Mind Map',error);}});
     if(!map || !supports('text-input','setText'))throw new Error('Mind Map text-input capability/method is missing');
     const hasSettings=supports('settings-v1','getSettings')&&supports('settings-v1','setSettings'),hasPDF=supports('pdf-export','exportPDF');
-    const hasSeed=hasSettings&&(!historyEnabled||supports('color-seed-only','setColorSeed'));
+    const hasSeed=hasSettings&&(!seedHistory.enabled||supports('color-seed-only','setColorSeed'));
     for(const id of ['random-color','color-seed'])$(id).closest('.option-row').hidden=!hasSeed;
     $('settings-controls').hidden=!hasSettings;$('download-pdf').hidden=!hasPDF;$('map-more').hidden=!(hasSettings||hasPDF);
     document.querySelector('.map-controls').hidden=false;
