@@ -107,6 +107,10 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
       <button id="map-more" class="shell-button" aria-label="Map options" aria-expanded="false" aria-controls="map-options">⋯</button>
       <div id="map-options" hidden>
         <div id="settings-controls" hidden>
+          <div class="section-title root-option" hidden>Top-level layout</div>
+          <div class="option-row root-option" hidden><label class="option-label" for="root-count">WRAP</label><div class="wrap-controls"><div class="stepper"><button id="root-down" aria-label="Decrease top-level Wrap count">‹</button><input id="root-count" aria-label="Top-level Wrap count" aria-describedby="root-hint" type="number" inputmode="numeric" min="1" step="1" value="3"><button id="root-up" aria-label="Increase top-level Wrap count">›</button></div><label class="wrap-check"><input id="root-enabled" type="checkbox" aria-label="Enable top-level Wrap" aria-describedby="root-hint"></label></div></div>
+          <div id="root-hint" class="layout-hint root-option" hidden>Available when at least two top-level nodes are shown.</div>
+          <div class="sep root-option" hidden></div>
           <div class="section-title">First-level branches</div>
           <div class="option-row"><label class="option-label" for="hlimit-count">WRAP</label><div class="wrap-controls"><div class="stepper"><button id="wrap-down" aria-label="Decrease Wrap count">‹</button><input id="hlimit-count" aria-label="Wrap count" aria-describedby="wrap-hint" type="number" inputmode="numeric" min="1" step="1" value="3"><button id="wrap-up" aria-label="Increase Wrap count">›</button></div><label class="wrap-check"><input id="hlimit-enabled" type="checkbox" aria-label="Enable Wrap" aria-describedby="wrap-hint"></label></div></div>
           <div id="wrap-hint" class="layout-hint">WRAP and LEVELS cannot be on together.</div>
@@ -148,19 +152,20 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.7.5' },
-  mindmap: { src: './mindmap.js', v: '1.7.7' }
+  outliner: { src: './outliner.js', v: '1.8.0' },
+  mindmap: { src: './mindmap.js', v: '1.8.0' }
 };
 // BEGIN SYNC FILTER
-function projectOutline(snapshot, syncCollapse, syncFocus) {
+function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null) {
   if (!snapshot || !Array.isArray(snapshot.tree)) throw new TypeError('Invalid outline snapshot');
-  let zoomNode = null;
+  let zoomNode = null, pinnedNode = null;
   const seen = new Set(), nodes = [], search = snapshot.tree.slice().reverse();
   while (search.length) {
     const node = search.pop();
     if (!node || typeof node !== 'object' || !Number.isInteger(node.id) || typeof node.text !== 'string' || typeof node.open !== 'boolean' || !Array.isArray(node.children) || seen.has(node.id)) throw new TypeError('Invalid outline node');
     seen.add(node.id);nodes.push(node);
     if (node.id === snapshot.zoomId) zoomNode = node;
+    if (node.id === pinnedId) pinnedNode = node;
     for (let i = node.children.length - 1; i >= 0; i--) search.push(node.children[i]);
   }
   // R11: prune the full tree bottom-up before focus/collapse; never mutate source nodes.
@@ -172,8 +177,9 @@ function projectOutline(snapshot, syncCollapse, syncFocus) {
     }
   }
   // A valid zoom target pruned as an empty leaf means blank, not Home fallback.
-  const start = syncFocus && zoomNode ? [zoomNode] : snapshot.tree;
-  const outlineStats={maxDepth:0,maxSiblings:snapshot.tree.length},metrics=snapshot.tree.map(node=>({node,depth:snapshot.tree.length===1?0:1}));
+  const start = pinnedNode ? [pinnedNode] : syncFocus && zoomNode ? [zoomNode] : snapshot.tree;
+  const collapseAnchor = pinnedNode || zoomNode;
+  const outlineStats={maxDepth:0,maxSiblings:0},metrics=snapshot.tree.map(node=>({node,depth:0}));
   while(metrics.length){const {node,depth}=metrics.pop();outlineStats.maxDepth=Math.max(outlineStats.maxDepth,depth);outlineStats.maxSiblings=Math.max(outlineStats.maxSiblings,node.children.length);for(const child of node.children)metrics.push({node:child,depth:depth+1});}
   const stack = [], lines = [], placeholderNodes = [], nodeTexts = [];
   for (let i = start.length - 1; i >= 0; i--) stack.push({node:start[i], depth:0});
@@ -184,7 +190,7 @@ function projectOutline(snapshot, syncCollapse, syncFocus) {
     const label = placeholder ? '(Untitled)' : node.text.replace(/\r\n?|\n/g, ' ');
     if (placeholder) placeholderNodes.push(lines.length);
     lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);
-    if (!syncCollapse || node.open || node === zoomNode) {
+    if (!syncCollapse || node.open || node === collapseAnchor) {
       for (let i = node.children.length - 1; i >= 0; i--) stack.push({node:node.children[i], depth:depth+1});
     }
   }
@@ -237,7 +243,8 @@ function write(key, value) {
   }
 }
 const bool=v=>typeof v==='boolean', positive=v=>Number.isFinite(v)&&v>0;
-let syncCollapse=read('moa:syncCollapse',true,bool), syncFocus=read('moa:syncFocus',true,bool);
+let syncCollapse=read('moa:syncCollapse',true,bool);
+const legacySyncFocus=read('moa:syncFocus',true,bool);
 // R12 shared floors are independent of the panel; panel has input priority.
 const O=346, M=346, MIN_SPLIT_W=692, DEFAULT_FRACTION=.35;
 const DRAG_SLOP=4, RELEASE_FRAC=.42;
@@ -246,7 +253,7 @@ if(legacyPixels!==null)fraction=DEFAULT_FRACTION;
 let W=0,H=0,narrowPortrait=false,covered=false,paneControls=false;
 let layoutFrame=null,geometryGeneration=0;
 let widthFrame=null,drag=null,lastTap=null,geometryTarget=null,viewportLeft=0,suppressDoubleClickUntil=0;
-let settings={horizontalLimit:{enabled:read('moa:map:hlimitEnabled',false,bool),count:read('moa:map:hlimitCount',3,v=>Number.isInteger(v)&&v>0)},deeperHorizontal:{enabled:read('moa:map:deeperEnabled',false,bool),levels:read('moa:map:deeperLevels',1,v=>Number.isSafeInteger(v)&&v>=1)},siblingLimit:{enabled:read('moa:map:siblingLimitEnabled',true,bool),count:read('moa:map:siblingLimitCount',3,v=>Number.isSafeInteger(v)&&v>=1)},colorSeed:read('moa:map:colorSeed',0,v=>Number.isInteger(v)&&v>=0)};
+let settings={rootLayout:read('moa:map:rootLayout',{enabled:false,count:3,followMax:false},v=>v&&typeof v.enabled==='boolean'&&Number.isSafeInteger(v.count)&&v.count>=1&&typeof v.followMax==='boolean'),horizontalLimit:{enabled:read('moa:map:hlimitEnabled',false,bool),count:read('moa:map:hlimitCount',3,v=>Number.isInteger(v)&&v>0)},deeperHorizontal:{enabled:read('moa:map:deeperEnabled',false,bool),levels:read('moa:map:deeperLevels',1,v=>Number.isSafeInteger(v)&&v>=1)},siblingLimit:{enabled:read('moa:map:siblingLimitEnabled',true,bool),count:read('moa:map:siblingLimitCount',3,v=>Number.isSafeInteger(v)&&v>=1)},colorSeed:read('moa:map:colorSeed',0,v=>Number.isInteger(v)&&v>=0)};
 let outline=null, map=null, mapModule=null, dirty=true, lastProjection=null, syncFrame=null, settingsTimer=null, settingsPending=true;
 const mapVisible=()=>!covered && W>0 && H>0;
 function supports(cap, method) {return !!(map && mapModule.capabilities.includes(cap) && typeof map[method]==='function');}
@@ -364,6 +371,49 @@ const seedHistory=createSeedHistoryController({
   setSeed:seed=>{settings={...settings,colorSeed:seed};},
   reportError:error=>report('Mind Map',error),reportStorageFailure:historyStorageFailure,initialSeed:settings.colorSeed
 });
+// Focus ownership stays in the shell; map calls run only through guarded scheduling.
+function createMapFocusController(){
+  const valid=s=>s&&typeof s.syncFocus==='boolean'&&(s.pinnedId===null||Number.isInteger(s.pinnedId));
+  const saved=read('moa:map:focusState',{syncFocus:legacySyncFocus,pinnedId:null},valid);
+  let state={syncFocus:saved.syncFocus,pinnedId:saved.pinnedId};
+  const value=()=>({...state}),tag=s=>({kind:'map-focus',state:{...s}});
+  const contains=(snapshot,id)=>{const stack=snapshot.tree.slice();while(stack.length){const n=stack.pop();if(n.id===id)return true;for(const child of n.children)stack.push(child);}return false;};
+  function present(){
+    syncButtons();
+    try{if(outline&&window.Outliner.capabilities.includes('pin-focus-menu-v1')&&typeof outline.setPinnedFocus==='function')outline.setPinnedFocus(state.pinnedId);}catch(error){report('Outliner pin menu',error);}
+  }
+  function apply(value){
+    if(value?.kind!=='map-focus'||!valid(value.state))return false;
+    state={syncFocus:value.state.syncFocus,pinnedId:value.state.pinnedId};
+    write('moa:map:focusState',state);present();scheduleSync();return true;
+  }
+  function commit(after){
+    if(!seedHistory.enabled||!seedHistory.settleSeedDraft())return false;
+    return outline.commitHostHistory({before:tag(state),after:tag(after)});
+  }
+  function request({nodeId,action}){
+    if(!Number.isInteger(nodeId)||!contains(outline.getSnapshot(),nodeId))return;
+    if(action==='pin')commit({...state,pinnedId:nodeId});
+    else if(action==='unpin'&&nodeId===state.pinnedId)commit({...state,pinnedId:null});
+  }
+  function topAction(){
+    if(state.pinnedId!==null)commit({syncFocus:false,pinnedId:null});
+    else apply(tag({syncFocus:!state.syncFocus,pinnedId:null}));
+  }
+  function reconcile(snapshot){
+    return state.pinnedId!==null&&!contains(snapshot,state.pinnedId)?{before:tag(state),after:tag({syncFocus:false,pinnedId:null})}:null;
+  }
+  function initialize(snapshot,available){
+    const transition=!available&&state.pinnedId!==null?{after:tag({syncFocus:false,pinnedId:null})}:reconcile(snapshot);if(transition)apply(transition.after);else {write('moa:map:focusState',state);present();}
+  }
+  return{apply,request,topAction,reconcile,initialize,get value(){return value();}};
+}
+const mapFocus=createMapFocusController();
+function composeHistoryHost(module){
+  const seed=seedHistory.makeHost();
+  return{...seed,apply:value=>value?.kind==='map-focus'?mapFocus.apply(value):seed.apply(value),
+    ...(module.capabilities.includes('outline-focus-history-v1')?{reconcileFocus:mapFocus.reconcile}:{})};
+}
 function persistSettings(value) {
   if(!value)return;
   if(!value.horizontalLimit || typeof value.horizontalLimit.enabled!=='boolean' || !Number.isInteger(value.horizontalLimit.count) || value.horizontalLimit.count<1 || !Number.isInteger(value.colorSeed) || value.colorSeed<0){report('Mind Map','Settings API returned invalid data');return;}
@@ -371,6 +421,14 @@ function persistSettings(value) {
   write('moa:map:hlimitEnabled',settings.horizontalLimit.enabled);
   write('moa:map:hlimitCount',settings.horizontalLimit.count);
   if(!seedHistory.enabled)write('moa:map:colorSeed',settings.colorSeed);
+  const outer=supports('root-layout-v1','getSettings')&&settings.rootLayout,rootBound=outer?readSettingBounds('rootLayout'):null;
+  document.querySelectorAll('.root-option').forEach(row=>{row.hidden=!outer;});
+  if(outer){
+    write('moa:map:rootLayout',settings.rootLayout);
+    $('root-enabled').checked=outer.enabled;$('root-enabled').disabled=!rootBound?.available;
+    $('root-count').value=rootBound?.effectiveCount??outer.count;$('root-count').disabled=!rootBound?.available||!outer.enabled;
+    document.querySelectorAll('.root-option').forEach(row=>{row.style.opacity=rootBound?.available?'':'.5';});
+  }
   const branch=supports('branch-layout-v1','getSettings')&&settings.deeperHorizontal&&settings.siblingLimit;
   const deeper=!!(branch&&settings.deeperHorizontal.enabled);
   $('hlimit-enabled').checked=settings.horizontalLimit.enabled;
@@ -394,7 +452,7 @@ function flushSync(revealing=false) {
   if(seedHistory.enabled&&seedHistory.dirty)seedHistory.queueSeedDelivery();
   if(!dirty || !outline || !supports('text-input','setText') || !mapVisible()&&!revealing)return;
   try {
-    const projection=projectOutline(outline.getSnapshot(),syncCollapse,syncFocus);
+    const projection=projectOutline(outline.getSnapshot(),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId);
     const {text}=projection;
     const placeholderNodes=supports('placeholderNodes','setText')?projection.placeholderNodes:[];
     const nodeTexts=supports('node-descriptions','setText')?projection.nodeTexts:undefined;
@@ -422,7 +480,9 @@ function scheduleSync() {
 }
 function syncButtons() {
   $('sync-collapse').setAttribute('aria-pressed',String(syncCollapse));
-  $('sync-focus').setAttribute('aria-pressed',String(syncFocus));
+  const focus=mapFocus.value,pinned=focus.pinnedId!==null,button=$('sync-focus');
+  button.setAttribute('aria-pressed',String(pinned||focus.syncFocus));button.setAttribute('aria-label',pinned?'Pin Focus':'Sync focus');
+  button.querySelector('.long-label').textContent=pinned?'Pin Focus':'Sync focus';button.querySelector('.short-label').textContent=pinned?'Pin':'Focus';
 }
 function clampWidth(value) {return Math.max(O,Math.min(W-M,value));}
 function defaultWidth() {return clampWidth(W*DEFAULT_FRACTION);}
@@ -671,21 +731,23 @@ divider.addEventListener('keydown',event=>{
 window.addEventListener('blur',()=>{lastTap=null;if(drag)endDrag({pointerId:drag.id},true);});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&drag){event.preventDefault();endDrag({pointerId:drag.id},true);}});
 $('sync-collapse').addEventListener('click',()=>{syncCollapse=!syncCollapse;write('moa:syncCollapse',syncCollapse);syncButtons();scheduleSync();});
-$('sync-focus').addEventListener('click',()=>{syncFocus=!syncFocus;write('moa:syncFocus',syncFocus);syncButtons();scheduleSync();});
+$('sync-focus').addEventListener('click',()=>mapFocus.topAction());
 $('map-more').addEventListener('click',()=>{const open=$('map-options').hidden;$('map-options').hidden=!open;$('map-more').setAttribute('aria-expanded',String(open));if(open)refreshSettings();updateControlPlacement();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('.map-controls,#divider,.pane-action,#corner-toggle'))closeOptions();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('map-options').hidden){closeOptions();if(eligibleTarget($('map-more'),Math.max(0,displayedGeometry().width+displayedGeometry().left)))$('map-more').focus();}});
 function changeSettings(partial) {flushSync();settingsPending=false;persistSettings(mapCall('setSettings',partial));}
+$('root-enabled').addEventListener('change',()=>{if(!$('root-enabled').disabled)changeSettings({rootLayout:{enabled:$('root-enabled').checked}});});
 $('hlimit-enabled').addEventListener('change',()=>{if(!$('hlimit-enabled').disabled)changeSettings({horizontalLimit:{enabled:$('hlimit-enabled').checked,count:$('hlimit-count').value},...($('hlimit-enabled').checked?{deeperHorizontal:{enabled:false}}:{})});});
 $('deeper-enabled').addEventListener('change',()=>{if(!$('deeper-enabled').disabled)changeSettings({deeperHorizontal:{enabled:$('deeper-enabled').checked},...($('deeper-enabled').checked?{horizontalLimit:{enabled:false}}:{})});});
 $('sibling-enabled').addEventListener('change',()=>{if(!$('sibling-enabled').disabled)changeSettings({siblingLimit:{enabled:$('sibling-enabled').checked}});});
 const layoutNumbers={
+  'root-count':{key:'rootLayout',field:'count',down:'root-down',up:'root-up'},
   'hlimit-count':{key:'horizontalLimit',field:'count',down:'wrap-down',up:'wrap-up'},
   'deeper-levels':{key:'deeperHorizontal',field:'levels',down:'levels-down',up:'levels-up'},
   'sibling-count':{key:'siblingLimit',field:'count',down:'limit-down',up:'limit-up'}
 };
 function readSettingBounds(key){
-  const capability=key==='horizontalLimit'?'settings-bounds':'branch-layout-v1';
+  const capability=key==='rootLayout'?'root-layout-v1':key==='horizontalLimit'?'settings-bounds':'branch-layout-v1';
   if(!supports(capability,'getSettingBounds'))return null;
   const value=mapCall('getSettingBounds'),bound=value&&value[key];
   if(key==='horizontalLimit'&&!(Number.isInteger(bound?.max)&&bound.max>=1))return null;
@@ -700,7 +762,7 @@ function updateSettingButtons(){
   $('wrap-down').disabled=off||$('hlimit-count').disabled||count<=1;$('wrap-up').disabled=off||$('hlimit-count').disabled||count>=bounds.max;
   for(const [id,row] of Object.entries(layoutNumbers)){
     if(id==='hlimit-count')continue;
-    const input=$(id),bound=readSettingBounds(row.key),value=settings[row.key]?.[row.field];
+    const input=$(id),bound=readSettingBounds(row.key),value=row.key==='rootLayout'?bound?.effectiveCount:settings[row.key]?.[row.field];
     input.max=bound?bound.max:'';$(row.down).disabled=input.disabled||!bound||value<=bound.min;$(row.up).disabled=input.disabled||!bound||value>=bound.max;
   }
   $('seed-down').disabled=seed<=0;$('seed-up').disabled=seed>=16777215;
@@ -769,7 +831,7 @@ async function start() {
     const wantsHeader=wantsPaneControls&&module.capabilities.includes('header-content');
     headerContent.hidden=!wantsHeader;
     const wantsHistory=module.capabilities.includes('host-history');
-    const historyOptions=wantsHistory?{historyHost:seedHistory.makeHost()}:{};
+    const historyOptions=wantsHistory?{historyHost:composeHistoryHost(module)}:{};
     outline=module.mount(outlineHost,{...historyOptions,...(wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{})});
     if(wantsPaneControls&&outline&&typeof outline.setPaneMode!=='function'&&typeof outline.destroy==='function'){
       outline.destroy();headerContent.hidden=true;workspace.append(headerContent);outline=module.mount(outlineHost,historyOptions);
@@ -781,6 +843,9 @@ async function start() {
       outline=module.mount(outlineHost,wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{});
     }
     if(seedHistory.enabled){$('color-seed').value=seedHistory.display;const destroy=outline.destroy;outline.destroy=()=>{seedHistory.dispose();destroy();};}
+    const hasPin=module.capabilities.includes('pin-focus-menu-v1')&&module.capabilities.includes('outline-focus-history-v1')&&seedHistory.enabled&&typeof outline.setPinnedFocus==='function';
+    if(hasPin)outline.on('pinFocus',mapFocus.request);
+    mapFocus.initialize(outline.getSnapshot(),hasPin);
     ['change','toggle','zoom'].forEach(event=>outline.on(event,scheduleSync));
     paneControls=module.capabilities.includes('pane-controls')&&typeof outline.setPaneMode==='function';
     if(paneControls)outline.on('paneAction',({action})=>{if(action==='toggle')toggleSidebar();else if(action==='expand'&&!narrowPortrait)selectPane(mode==='full'?'split':'full');});

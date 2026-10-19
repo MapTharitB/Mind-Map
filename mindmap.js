@@ -1,4 +1,4 @@
-/* MindMap 1.7.7 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.8.0 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -44,9 +44,18 @@ function mount(container,opts={}){
   if(ownsFont)document.head.appendChild(fontLink);
 function createLayoutPreferences(){
 let hlimitInf=true,hlimitN=3,d1Max=Infinity,wrapBoundsReady=false;
+let rootEnabled=false,rootCount=3,rootFollowMax=false,visibleRootCount=0;
+const rootMaximum=()=>Math.max(1,visibleRootCount-1);
+const rootEffective=()=>rootFollowMax?rootMaximum():Math.min(rootCount,rootMaximum());
 let levelsEnabled=false,levelsN=1,siblingLimitEnabled=true,siblingLimitN=3,branchDepthMax=1,branchSiblingMax=1,branchBoundsReady=false,levelsCountChosen=false,siblingCountChosen=false;
 function hlimitCap(d){return Math.max(1,d-1);}
 function apply(partial){
+  const outer=partial.rootLayout;
+  if(outer&&typeof outer==='object'){
+    if(typeof outer.enabled==='boolean')rootEnabled=outer.enabled;
+    if('count' in outer){const n=Number(outer.count);if(Number.isFinite(n)&&Number.isSafeInteger(Math.round(n))&&n>0){rootCount=Math.max(1,Math.round(n));if(!('followMax' in outer))rootFollowMax=visibleRootCount>=2&&rootCount===rootMaximum();}}
+    if(typeof outer.followMax==='boolean')rootFollowMax=outer.followMax;
+  }
   const limit=partial.horizontalLimit;
   if(limit&&typeof limit==='object'){
     if('enabled' in limit)hlimitInf=!limit.enabled;
@@ -64,7 +73,7 @@ function apply(partial){
 function updateBranchBounds(root,sourceReady,sourceStats){
   if(!sourceReady)return;
   let stats=sourceStats;
-  if(!stats){let depth=0,siblings=root?root.synthetic?root.children.length:1:0;const walk=n=>{depth=Math.max(depth,n.depth);siblings=Math.max(siblings,n.children.length);n.children.forEach(walk);};if(root)walk(root);stats={maxDepth:depth,maxSiblings:siblings};}
+  if(!stats){let depth=0,siblings=0;const walk=(n,d)=>{depth=Math.max(depth,d);siblings=Math.max(siblings,n.children.length);n.children.forEach(ch=>walk(ch,d+1));};if(root)(root.synthetic?root.children:[root]).forEach(n=>walk(n,0));stats={maxDepth:depth,maxSiblings:siblings};}
   const nextDepth=Math.max(1,stats.maxDepth),nextSiblings=Math.max(1,stats.maxSiblings);
   const follow=(value,previous,next,min,chosen)=>chosen&&branchBoundsReady&&value===previous&&next>previous?next:clamp(value,min,next);
   levelsN=levelsCountChosen?follow(levelsN,branchDepthMax,nextDepth,1,true):clamp(1,1,nextDepth);siblingLimitN=siblingCountChosen?follow(siblingLimitN,branchSiblingMax,nextSiblings,1,true):clamp(3,1,nextSiblings);
@@ -73,7 +82,8 @@ function updateBranchBounds(root,sourceReady,sourceStats){
 
 function observeRoot(root,sourceReady,sourceStats){
   updateBranchBounds(root,sourceReady,sourceStats);
-  const nd=root.children.length||1;
+  const roots=root.synthetic?root.children:[root];visibleRootCount=roots.length;
+  const nd=Math.max(1,...roots.map(n=>n.children.length));
   if(!wrapBoundsReady||nd!==d1Max){
     wrapBoundsReady=true;
     const prevCap=hlimitCap(d1Max);d1Max=nd;
@@ -83,12 +93,14 @@ function observeRoot(root,sourceReady,sourceStats){
   }
 }
 function observeBlank(sourceReady,sourceStats){
-  updateBranchBounds(null,sourceReady,sourceStats);
+  updateBranchBounds(null,sourceReady,sourceStats);visibleRootCount=0;
 if(d1Max!==1||sourceReady&&!wrapBoundsReady){d1Max=1;if(hlimitN>1)hlimitN=1;}if(sourceReady)wrapBoundsReady=true;
 }
-function getSettingBounds(){return{horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
-function getSettings(){return{horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
+function getSettingBounds(){return{rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
+function getSettings(){return{rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
 return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,
+  get rootEnabled(){return rootEnabled;},
+  get rootEffective(){return rootEffective();},
   get hlimitInf(){return hlimitInf;},
   get hlimitN(){return hlimitN;},
   get levelsEnabled(){return levelsEnabled;},
@@ -348,7 +360,7 @@ function describedChildrenOffset(node,subGap){
 function footprintH(node,MD){
   if(node.subtree)return node.subtree.height;
   if(!node.children.length)return node.fs*C.LINE_H+node.textBlock.extraHeight;
-  const sR=node.depth>=1?C.CHILD_STEP_R:1;
+  const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1;
   const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
   let h=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
   for(let i=0;i<node.children.length;i++){
@@ -376,7 +388,7 @@ function place(node,y0){
   if(node.subtree){node.y=y0;for(const offset of node.subtree.childOffsets)place(offset.node,y0+offset.y);return y0+node.subtree.height;}
   node.y=y0;
   if(node.children.length){
-    const sR=node.depth>=1?C.CHILD_STEP_R:1;
+    const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1;
     const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
     let yc=y0+(node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight);
     for(let i=0;i<node.children.length;i++){
@@ -399,7 +411,7 @@ function measureSubtree(node,MD,forceVertical=false){
   if(!forceVertical)node.children.forEach(ch=>measureSubtree(ch,MD));
   let minX=node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
-  const horizontal=!forceVertical&&layoutPreferences.levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].depth>=2&&children[0].depth<=layoutPreferences.levelsN+1&&(!layoutPreferences.siblingLimitEnabled||children.length<=layoutPreferences.siblingLimitN);
+  const horizontal=!forceVertical&&layoutPreferences.levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].layoutDepth>=2&&children[0].layoutDepth<=layoutPreferences.levelsN+1&&(!layoutPreferences.siblingLimitEnabled||children.length<=layoutPreferences.siblingLimitN);
   if(children.length){
     if(horizontal){
       let cursor=0;
@@ -413,7 +425,7 @@ function measureSubtree(node,MD,forceVertical=false){
       const y=node.fs+node.textBlock.extraHeight+baseGap+lowerThaiChildBonus(node,baseGap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,childFs);
       for(const offset of offsets){offset.x+=mW(node.label,node.fs,node.fw)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
     }else{
-      const sR=node.depth>=1?C.CHILD_STEP_R:1,subGap=children[0].fs*C.SUB_GAP_R*sR;
+      const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1,subGap=children[0].fs*C.SUB_GAP_R*sR;
       let y=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
       const spine=spineOffsetOf(node);
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
@@ -423,7 +435,7 @@ function measureSubtree(node,MD,forceVertical=false){
         const ch=children[i];if(i)y+=siblingGapDelta(ch,children[i-1].subtree.lastLeafFs);
         // Centered own paragraphs reserve their left ink without changing title anchors within the block.
         const descriptionInset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
-        if((node.depth>0||(!node.synthetic&&node.children.length===1))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+armLen(ch.depth,MD)<=lnW(ch.depth,MD)/2)measureSubtree(ch,MD,true);
+        if(((node.layoutDepth??node.depth)>0||(!node.synthetic&&node.children.length===1))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+armLen(ch.depth,MD)<=lnW(ch.depth,MD)/2)measureSubtree(ch,MD,true);
         offsets.push({node:ch,x:spine+armLen(ch.depth,MD)+descriptionInset,y});y+=ch.subtree.height;
       }
       height=y;
@@ -432,7 +444,7 @@ function measureSubtree(node,MD,forceVertical=false){
   }
   node.subtree={minX,maxX,height,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
 }
-function layoutSimple(root,MD,colorSeed){
+function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
   const d1Fs=NC?d1[0].fs:C.BASE_FONT;
@@ -450,7 +462,7 @@ function layoutSimple(root,MD,colorSeed){
   const rCX=NC===0?C.LEFT_M+mW(root.label,root.fs,root.fw)/2:
     NC===1?d1[0].cx:(d1[0].cx+d1[NC-1].cx)/2;
   root.cx=rCX;root.x=rCX-mW(root.label,root.fs,root.fw)/2;
-  root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
+  if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
   const d1BaseGap=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
   const d1Y=root.y+root.fs+root.textBlock.extraHeight+d1BaseGap+lowerThaiChildBonus(root,d1BaseGap)*(NC===1?1:C.LOWER_THAI_FANOUT_FRAC);
   const firstRowBonus=firstRowUpwardBonus(d1,d1Fs);
@@ -459,7 +471,7 @@ function layoutSimple(root,MD,colorSeed){
     root.x+mW(root.label,root.fs,root.fw))+C.RIGHT_M;
   const pH=(bots.length?Math.max(...bots):d1Y+120)+C.BOT_M;
   const av=d1Y-root.y-root.fs-root.textBlock.extraHeight;
-  const rg=Math.min(cgap(1,MD),av*0.3);
+  const rg=Math.min(cgap(d1[0]?.depth||1,MD),av*0.3);
   const rb=root.y+root.fs+root.textBlock.extraHeight+rg;
   const d1BusY=rb+(d1Y-rb)*C.BUS_MID;
   const sX0=Math.min(root.x,NC?cl[0]:root.x);
@@ -468,11 +480,11 @@ function layoutSimple(root,MD,colorSeed){
   return{root,MD,pW,pH,d1Y,d1Mode:'simple',d1Cols:null,d1Groups:null,
     d1ColX:null,d1BusY,d1X0:sX0,d1X1:sX1,firstRowBonus};
 }
-function layoutGrid(root,MD,colorSeed){
+function layoutGrid(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
   const cols=Math.min(layoutPreferences.hlimitN,NC);
-  const ARM1=armLen(1,MD);
+  const ARM1=armLen(d1[0].depth,MD);
   const d1Fs=d1[0].fs;
   const base=Math.floor(NC/cols),extra=NC%cols;
   const colChildren=[];let cidx=0;
@@ -489,7 +501,7 @@ function layoutGrid(root,MD,colorSeed){
   const d1BaseGap_g=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
   const d1Y_g=root.y+(cols===1&&root.description!==undefined?describedChildrenOffset(root,d1Fs*C.SUB_GAP_R):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
   const av_g=d1Y_g-root.y-root.fs-root.textBlock.extraHeight;
-  const rg_g=Math.min(cgap(1,MD),av_g*0.3);
+  const rg_g=Math.min(cgap(d1[0]?.depth||1,MD),av_g*0.3);
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
   const d1BusY=rb_g+(d1Y_g-rb_g)*C.BUS_MID;
   const gridStartY=d1Y_g;
@@ -524,24 +536,53 @@ function layoutGrid(root,MD,colorSeed){
   const spineCX=(d1ColX[0]+d1ColX[cols-1])/2;
   const rCX_g=(existingCX+spineCX)/2;
   root.cx=rCX_g;root.x=rCX_g-mW(root.label,root.fs,root.fw)/2;
-  root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
+  if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
   if(cols===1)assignSubtreeX(root,MD);
   let _gMaxX=root.x+mW(root.label,root.fs,root.fw);
   (function _gwk(n){const rx=n.x+(n.description===undefined?nodeWidth(n):n.textBlock.maxX);if(rx>_gMaxX)_gMaxX=rx;n.children.forEach(_gwk);})(root);
   return{root,MD,pW:_gMaxX+C.RIGHT_M,pH:gridY1+C.BOT_M,d1Y:gridStartY,
     d1Mode:'grid',d1Cols:cols,d1Groups,d1ColX,d1BusY,d1X0:gridX0,d1X1:gridX1,firstRowBonus};
 }
-function layout(root,colorSeed){
-  const MD=visualMaxD(root);annotateNodes(root,MD);
-  const described=hasDescription(root);if(layoutPreferences.levelsEnabled||described)measureSubtree(root,MD);
+function layoutTree(root,MD,colorSeed,recolor=true){
   const NC=root.children.length;
   // A lone real root child always uses the existing left-side vertical connector.
-  if(NC===1&&!root.synthetic)return layoutGrid(root,MD,colorSeed);
-  return(layoutPreferences.levelsEnabled||layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed):layoutGrid(root,MD,colorSeed);
+  if(NC===1&&!root.synthetic)return layoutGrid(root,MD,colorSeed,recolor);
+  return(layoutPreferences.levelsEnabled||layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed,recolor):layoutGrid(root,MD,colorSeed,recolor);
+}
+function translateLayout(lay,dx,dy){
+  const walk=n=>{n.x+=dx;n.y+=dy;if(n.cx!=null)n.cx+=dx;n.children.forEach(walk);};walk(lay.root);
+  for(const key of ['d1X0','d1X1'])lay[key]+=dx;
+  for(const key of ['d1Y','d1BusY'])lay[key]+=dy;
+  if(lay.d1ColX)lay.d1ColX=lay.d1ColX.map(x=>x+dx);
+  if(lay.d1Groups)for(const g of lay.d1Groups){g.cellX+=dx;g.labelX+=dx;g.cellY+=dy;}
+}
+function layout(root,colorSeed){
+  const roots=root.synthetic?root.children:[root],logical=(n,d)=>{n.layoutDepth=d;n.children.forEach(ch=>logical(ch,d+1));};
+  roots.forEach(n=>logical(n,0));
+  const MD=visualMaxD(root);annotateNodes(root,MD);
+  const described=hasDescription(root);if(layoutPreferences.levelsEnabled||described)roots.forEach(n=>measureSubtree(n,MD));
+  if(!root.synthetic)return layoutTree(root,MD,colorSeed);
+  // Color once in original whole-map order; outer packing only translates complete trees.
+  root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
+  const trees=roots.map(n=>{const lay=layoutTree(n,MD,colorSeed,false);lay.hasDescriptions=hasDescription(n);return lay;});
+  const boxes=trees.map(contentBounds),cols=layoutPreferences.rootEnabled?Math.min(layoutPreferences.rootEffective,trees.length):trees.length;
+  const base=Math.floor(trees.length/cols),extra=trees.length%cols;
+  let index=0,x=C.LEFT_M;
+  for(let c=0;c<cols;c++){
+    const size=base+(c<extra?1:0),end=index+size;let y=C.TOP_M,width=0;
+    for(;index<end;index++){
+      const lay=trees[index],box=boxes[index];translateLayout(lay,x-box.x,y-box.y);width=Math.max(width,box.w);y+=box.h;
+      if(index+1<end)y+=d1RowGap(trees[index+1].root);
+    }
+    if(c+1<cols)x+=width+d1ColGap([trees[end-1].root],[trees[end].root],armLen(trees[end].root.depth,MD));
+  }
+  const lay={root,MD,trees,hasDescriptions:described,d1Mode:'forest'};const box=contentBounds(lay);
+  lay.pW=box.x+box.w+C.RIGHT_M;lay.pH=box.y+box.h+C.BOT_M;return lay;
 }
 
 /* ══ CONTENT BOUNDS ══ */
 function contentBounds(lay){
+  if(lay.trees){const boxes=lay.trees.map(contentBounds),x=Math.min(...boxes.map(b=>b.x)),y=Math.min(...boxes.map(b=>b.y));return{x,y,w:Math.max(...boxes.map(b=>b.x+b.w))-x,h:Math.max(...boxes.map(b=>b.y+b.h))-y};}
   const root=lay.root;
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   const walk=n=>{
@@ -571,6 +612,7 @@ function contentBounds(lay){
 
 /* ══ CONNECTION SEGMENTS ══ */
 function getConnSegments(lay){
+  if(lay.trees)return lay.trees.flatMap(getConnSegments);
   const{root,MD,d1Mode,d1BusY,d1ColX,d1Groups,d1Cols,d1X0}=lay;
   const d1=root.children;
   const segs=[];
@@ -606,14 +648,14 @@ function getConnSegments(lay){
     if(d1.length){
       const by=d1BusY;
       const d1BaseGap=d1[0].fs*C.GAP_R*C.D0_D1_GAP_MULT;
-      const rg=Math.min(cgap(1,MD),d1BaseGap*0.3);
+      const rg=Math.min(cgap(d1[0].depth,MD),d1BaseGap*0.3);
       const rb=by-(d1BaseGap-rg)*C.BUS_MID;
       const upperLen=by-rb;
       let topX=root.cx,snapIdx=-1;
       if(d1.length>=3){
         const _sd=[];
         for(let i=1;i<d1.length-1;i++){
-          const n=d1[i],dg=Math.min(cgap(1,MD),(n.y-by)*0.3);
+          const n=d1[i],dg=Math.min(cgap(d1[0].depth,MD),(n.y-by)*0.3);
           const dist=Math.abs(n.cx-root.cx);
           if(dist<Math.min(upperLen,(n.y-dg)-by))_sd.push({i,dist});
         }
@@ -625,7 +667,7 @@ function getConnSegments(lay){
         }
         if(snapIdx!==-1)topX=(d1[snapIdx].cx+root.cx)/2;
       }
-      const lw1=lnW(1,MD);
+      const lw1=lnW(d1[0].depth,MD);
       seg(root.col,lw1,topX,rb,topX,by);
       if(d1.length>1)seg(root.col,lw1,d1[0].cx,by,d1[d1.length-1].cx,by);
       for(let i=0;i<d1.length;i++){
@@ -636,7 +678,7 @@ function getConnSegments(lay){
     d1.forEach(subSegs);return segs;
   }
   if(d1.length){
-    const lw1=lnW(1,MD);
+    const lw1=lnW(d1[0].depth,MD);
     if(d1Cols===1){
       const sx=spineXOf(root);
       const fc=d1[0],lastD1=d1[d1.length-1];
@@ -645,11 +687,11 @@ function getConnSegments(lay){
       seg(root.col,lw1,sx,root.y+root.fs+root.textBlock.extraHeight+vg,sx,lmy);
       for(const ch of d1){
         const ey=ch.y+ch.fs*ch.capFrac;
-        seg(root.col,lw1,sx,ey,ch.x-armLen(1,MD)*0.30,ey);
+        seg(root.col,lw1,sx,ey,ch.x-armLen(ch.depth,MD)*0.30,ey);
       }
     }else{
       const d1BaseGap=d1[0].fs*C.GAP_R*C.D0_D1_GAP_MULT;
-      const rg=Math.min(cgap(1,MD),d1BaseGap*0.3);
+      const rg=Math.min(cgap(d1[0].depth,MD),d1BaseGap*0.3);
       seg(root.col,lw1,root.cx,d1BusY-(d1BaseGap-rg)*C.BUS_MID,root.cx,d1BusY);
       seg(root.col,lw1,Math.min(d1X0,root.cx),d1BusY,Math.max(d1ColX[d1Cols-1],root.cx),d1BusY);
       for(let c=0;c<d1Cols;c++){
@@ -659,7 +701,7 @@ function getConnSegments(lay){
         seg(root.col,lw1,shaftX,d1BusY,shaftX,lastCh.y+lastCh.fs*lastCh.capFrac);
         for(const g of colGs){
           const ch=g.node;
-          seg(root.col,lw1,shaftX,ch.y+ch.fs*ch.capFrac,ch.x-armLen(1,MD)*0.30,ch.y+ch.fs*ch.capFrac);
+          seg(root.col,lw1,shaftX,ch.y+ch.fs*ch.capFrac,ch.x-armLen(ch.depth,MD)*0.30,ch.y+ch.fs*ch.capFrac);
         }
       }
     }
@@ -1436,5 +1478,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed};
 }
-window.MindMap={version:'1.7.7',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1'],mount};
+window.MindMap={version:'1.8.0',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1'],mount};
 })();

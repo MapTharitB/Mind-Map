@@ -82,7 +82,7 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .row.drop-in{background:var(--halo);box-shadow:inset 0 0 0 1px var(--accent)}
 .moa-outliner .dots{position:absolute;left:-47px;top:0;width:21px;height:var(--bh);display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:16px;opacity:0}
 .moa-outliner .row:hover .dots,.moa-outliner .dots:focus-visible{opacity:1}
-.moa-outliner .menu{position:fixed;display:none;z-index:20;background:var(--page);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 6px 24px rgba(0,0,0,.25);min-width:170px}
+.moa-outliner .menu{position:fixed;display:none;z-index:20;background:var(--page);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 6px 24px rgba(0,0,0,.25);min-width:170px;overflow-y:auto;overscroll-behavior:contain}
 .moa-outliner .menu.show{display:block}
 .moa-outliner .menu button{display:block;width:100%;text-align:left;font:inherit;font-size:14px;color:var(--ink);background:none;border:0;border-radius:5px;padding:6px 10px;cursor:pointer}
 .moa-outliner .menu [hidden]{display:none}
@@ -232,8 +232,8 @@ const template = String.raw`<div class="page">
      Export Visible exports only bullets that are currently expanded, never the children hidden by a collapsed bullet. -->
 <!-- Owner override 2026-10-16 (R12-3A): Clear All first; then separated style, expand/collapse and export groups. Historical REQUIREMENT above is retained verbatim. -->
 <!-- Latest owner override 2026-10-16 (V1.1): styles first; Clear All last after a separator. Supersedes the earlier Clear-All-first override retained above. -->
-<div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" role="separator"></div><button data-a="delete">Delete</button></div>
+<div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
+<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
@@ -371,7 +371,7 @@ function ownsEvent(e, historyShortcut = false) {
 function destroy() {
   if (destroyed) return;
   cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
-  historyHost = null; hist.length = 0; historyBusy = historyPreparing = historyComposing = false;
+  historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
   frames.forEach(id => window.cancelAnimationFrame(id)); frames.clear();
   if (resizeObserver) resizeObserver.disconnect();
@@ -394,7 +394,7 @@ function destroy() {
 }
 
 // Integration API only. Original persistence/history and editing decisions remain below.
-const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction'].map(event => [event, new Set()]));
+const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus'].map(event => [event, new Set()]));
 let publicationReady = false, publicationQueued = false, changeTimer = null, revision = 0;
 let immediateSnapshot, observedTree, publishedTree;
 const transientToggles = new Map();
@@ -411,7 +411,7 @@ function getSnapshot() {
   return { zoomId: zoom === root ? null : zoom.id, tree };
 }
 function on(event, fn) {
-  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom or paneAction and a callback');
+  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom, paneAction or pinFocus and a callback');
   if (destroyed) return () => {};
   subscribers.get(event).add(fn);
   return () => subscribers.get(event).delete(fn);
@@ -575,20 +575,39 @@ let anchor = null, cursor = null, hist = [], hi = -1, tm = null, dragSet = null,
 // and skipped by export. phNode = the placeholder, phOwner = the bullet (or root) it was added to.
 let phNode = null, phOwner = null;
 const snap = () => JSON.stringify({ root, zoom: zoom.id }, (k, v) => k === 'children' && phNode && v.length === 1 && v[0] === phNode && !phNode.text ? [] : v);
-function outlineHistoryIndex(i = hi) { while (i >= 0 && typeof hist[i] !== 'string') i--; return i; }
+// Outline snapshots stay canonical strings; compound focus metadata exists only in history.
+const outlineValue = entry => typeof entry === 'string' ? entry : entry?.outline;
+function outlineHistoryIndex(i = hi) { while (i >= 0 && !outlineValue(hist[i])) i--; return i; }
 function historyRootEqual(a, b) { return !!b && JSON.stringify(JSON.parse(a).root) === JSON.stringify(JSON.parse(b).root); }
 function appendHistory(entry) {
   hist.length = hi + 1; hist.push(entry);
   if (hist.length > 300) {
     const baseline = hist[0]; hist.shift();
-    if (typeof hist[0] !== 'string') hist[0] = baseline;
+    if (typeof hist[0] !== 'string') hist[0] = outlineValue(hist[0]) || baseline;
   }
   hi = hist.length - 1;
 }
-function record() {
-  clearTimeout(tm); tm = null; const x = snap();
+let typingSnapshot = null;
+function record(x = snap()) {
+  const pending = tm && typingSnapshot; clearTimeout(tm); tm = null; typingSnapshot = null;
   // Owner V1.1 exception: a changed zoom is an outline history step, even with identical text.
-  if (historyHost) { if (x === hist[outlineHistoryIndex()]) return; appendHistory(x); return; }
+  if (historyHost) {
+    if (x === outlineValue(hist[outlineHistoryIndex()])) return;
+    let focus = null;
+    if (!historyBusy && typeof historyHost.reconcileFocus === 'function') {
+      try {
+        const d = JSON.parse(x), edge = historyHost.reconcileFocus({zoomId:d.zoom===d.root.id?null:d.zoom,tree:d.root.children});
+        if (edge) {
+          const before = detachedHostValue(edge.before), after = detachedHostValue(edge.after);
+          // Only a compound pin removal needs the last typing snapshot here.
+          // Enter and explicit host actions already close typing before mutation.
+          if (pending && pending !== x) record(pending);
+          if (historyCallback('apply', after)) focus = {before,after};
+        }
+      } catch (_) { toast('History action could not complete'); }
+    }
+    appendHistory(focus ? {outline:x,focus} : x); return;
+  }
   if (x === hist[hi]) return; hist.length = hi + 1; hist.push(x); if (hist.length > 300) hist.shift(); hi = hist.length - 1;
 }
 function detachedHostValue(value) {
@@ -624,7 +643,10 @@ function runHistory(direction) {
     const next = direction === 'undo' ? hi - 1 : hi + 1;
     if (next < 0 || next >= hist.length) return false;
     const edge = hist[direction === 'undo' ? hi : next];
-    if (typeof edge === 'string') { hi = next; restore(outlineHistoryIndex()); }
+    if (outlineValue(edge)) {
+      if (edge.focus && !historyCallback('apply', detachedHostValue(edge.focus[direction === 'undo' ? 'before' : 'after']))) return false;
+      hi = next; restore(outlineHistoryIndex());
+    }
     else { if (!historyCallback('apply', detachedHostValue(edge[direction === 'undo' ? 'before' : 'after'])) || destroyed) return false; hi = next; }
     return true;
   } finally { historyBusy = false; }
@@ -646,12 +668,12 @@ function flushSave() {
 }
 function save(typing) {
   flushSave();
-  if (typing) { clearTimeout(tm); tm = setTimeout(record, 500); } else record();
+  if (typing) { typingSnapshot = snap(); clearTimeout(tm); tm = setTimeout(record, 500); } else record();
   schedulePublication();
 }
 function restore(i) {
-  const d = JSON.parse(hist[i]);
-  const viewOnly = d.zoom !== zoom.id && historyRootEqual(snap(), hist[i]);
+  const value = outlineValue(hist[i]), d = JSON.parse(value);
+  const viewOnly = d.zoom !== zoom.id && historyRootEqual(snap(), value);
   if (viewOnly) blurOutlineText();
   // Search state is keyed by node objects, and undo/redo rebuilds every node: carry it over by id so bullets typed during a search stay visible.
   const keepIds = [...sKeep].map(n => n.id), overIds = [...sOver].map(([n, v]) => [n.id, v]);
@@ -779,7 +801,7 @@ function focusEditor(binding, pos) {
 }
 function bindField(binding, t) {
   const isBreak = e => e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph';
-  let soft = false, composing = false;
+  let soft = false, composing = false, pendingBreak = null;
   const writeField = () => {
     const n = binding.getNode(), parts = { title: binding.title.value, description: binding.description ? binding.description.value : '', hasDescription: !!binding.description };
     if (t.dataset.role === 'description') parts.description = t.value; else parts.title = t.value;
@@ -790,16 +812,43 @@ function bindField(binding, t) {
   listen(t, 'compositionend', () => { composing = false; writeField(); refreshNodeEditor(binding); save(true); });
   listen(t, 'blur', () => { soft = false; });
   listen(t, 'keyup', e => { if (e.key === 'Enter') soft = false; });
+  // Owner correction: one Enter intent for hardware and both software-input paths.
+  const applyBreak = () => {
+    const n = binding.getNode(), range = readEditorRange(n, t), intent = enterIntent(n, range, binding.head);
+    if (intent.kind === 'newline') {
+      t.setRangeText('\n', t.selectionStart, t.selectionEnd, 'end');
+      writeField(); refreshNodeEditor(binding); if (binding.head) crumbs(); save(true);
+    } else if (intent.kind === 'navigate') {
+      if (range.role === 'description' && t.selectionStart !== t.selectionEnd) {
+        t.setRangeText('', t.selectionStart, t.selectionEnd, 'end');writeField();refreshNodeEditor(binding);crumbs();save(true);
+      }
+      toFirst();
+    }
+    else enter(n, range);
+  };
   listen(t, 'beforeinput', e => {
-    if (composing || e.isComposing || historyComposing) return;
-    if (!soft && isBreak(e) && e.cancelable) { e.preventDefault(); if (binding.head) toFirst(); else enter(binding.getNode(), readEditorRange(binding.getNode(), t)); }
+    pendingBreak = null;
+    if (composing || e.isComposing || historyComposing || soft || !isBreak(e)) return;
+    // Interior description Enter is a native newline, preserving native header Undo.
+    if (enterIntent(binding.getNode(), readEditorRange(binding.getNode(), t), binding.head).kind === 'newline') { soft = true; return; }
+    if (e.cancelable) { e.preventDefault(); applyBreak(); }
+    else pendingBreak = { value: t.value, start: t.selectionStart, end: t.selectionEnd };
   });
   listen(t, 'input', e => {
     const wasSoft = soft; soft = false;
     if (!composing && !e.isComposing && !historyComposing && !wasSoft && isBreak(e)) {
-      const c = t.selectionStart; t.value = t.value.slice(0, c - 1) + t.value.slice(c); t.setSelectionRange(c - 1, c - 1);
-      const n = writeField(); if (binding.head) { refreshNodeEditor(binding); crumbs(); save(true); toFirst(); } else enter(n, readEditorRange(n, t)); return;
+      const parts = splitNodeText(binding.getNode().text), old = pendingBreak || {
+        value: t.dataset.role === 'description' ? parts.description : parts.title,
+        start: Math.max(0, t.selectionStart - 1),
+        end: Math.max(0, (t.dataset.role === 'description' ? parts.description : parts.title).length - (t.value.length - t.selectionStart))
+      };
+      const n = binding.getNode(), offset = t.dataset.role === 'description' ? parts.title.length + 1 : 0;
+      const intent = enterIntent(n, {value:n.text,role:t.dataset.role,selectionStart:offset+old.start,selectionEnd:offset+old.end}, binding.head);
+      pendingBreak = null;
+      // Input-only fallback must also keep a legitimate browser-inserted description LF.
+      if (intent.kind !== 'newline') { t.value = old.value; t.setSelectionRange(old.start, old.end); applyBreak(); return; }
     }
+    pendingBreak = null;
     const role = t.dataset.role, local = t.selectionStart, n = writeField();
     if (composing || e.isComposing || historyComposing) { fit(t); save(true); return; }
     const hasNewTitleLF = role === 'title' && t.value.includes('\n');
@@ -812,6 +861,10 @@ function bindField(binding, t) {
     soft = (e.key === 'Enter' || e.keyCode === 13) && e.shiftKey && !e.ctrlKey && !e.metaKey;
     const n = binding.getNode(), range = readEditorRange(n, t), parts = splitNodeText(n.text), collapsed = range.start === range.end;
     if (soft) return; // native insertion, then split only the local editor on input
+    if ((e.key === 'Enter' || e.keyCode === 13) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (enterIntent(n, range, binding.head).kind === 'newline') { soft = true; return; }
+      e.preventDefault(); applyBreak(); return;
+    }
     if (collapsed && ((e.key === 'Backspace' && range.role === 'description' && t.selectionStart === 0) || (e.key === 'Delete' && range.role === 'title' && parts.hasDescription && t.selectionEnd === t.value.length))) {
       e.preventDefault(); n.text = parts.title + parts.description; refreshNodeEditor(binding); focusEditor(binding, parts.title.length); if (binding.head) crumbs(); save(true); return;
     }
@@ -974,10 +1027,30 @@ function tab(back) {
   render(sel.size ? null : it[0].id, pos);
 }
 // Split the bullet at the caret into a new bullet (or outdent when the bullet is empty). Shared by Enter and the toolbar.
+// Current owner override: split titles into same-level siblings; descriptions keep their own newlines.
+function enterIntent(n, t, head = false) {
+  const parts = splitNodeText(t.value), start = t.selectionStart, end = t.selectionEnd;
+  const text = t.value.slice(0, start) + t.value.slice(end);
+  if (t.role === 'description') return { kind: start < text.length ? 'newline' : head ? 'navigate' : 'insert', text, start };
+  if (head) return { kind: 'navigate', text, start };
+  if (!text && !n.children.length && par.get(n) !== zoom) return { kind: 'outdent', text, start };
+  return { kind: start === 0 || start < parts.title.length - (end - start) ? 'split' : 'insert', text, start };
+}
 function enter(n, t) {
-  const p = par.get(n), pos = t.selectionStart, end = t.selectionEnd;
-  if (!n.text && !n.children.length && p !== zoom) { outdent(n); render(n.id, 0); return; }
-  n.text = t.value.slice(0, pos); const nn = mk(t.value.slice(end));
+  const p = par.get(n), intent = enterIntent(n, t), parts = splitNodeText(intent.text);
+  record(); // Commit pending typing before the single structural history step.
+  if (intent.kind === 'outdent') { n.text = intent.text; outdent(n); render(n.id, 0); return; }
+  if (intent.kind === 'newline') {
+    n.text = intent.text.slice(0, intent.start) + '\n' + intent.text.slice(intent.start); render(n.id, intent.start + 1); return;
+  }
+  if (intent.kind === 'split') {
+    const upper = mk(parts.title.slice(0, intent.start));
+    n.text = joinNodeText({ ...parts, title: parts.title.slice(intent.start) });
+    p.children.splice(p.children.indexOf(n), 0, upper);
+    if (searching()) { sKeep.add(n); sKeep.add(upper); }
+    render(intent.start === 0 ? upper.id : n.id, 0); return;
+  }
+  n.text = intent.text; const nn = mk();
   if (searching()) { sKeep.add(n); sKeep.add(nn); }
   if (isOpen(n) && n.children.length) n.children.unshift(nn);
   else p.children.splice(p.children.indexOf(n) + 1, 0, nn);
@@ -1048,20 +1121,32 @@ function delItems(items) {
 }
 // Bullet menu. Wording is a requirement: Expand All / Collapse All act on this bullet's subtree, Export Visible, Export, Delete.
 const menu = container.querySelector('#ol-menu');
+let pinnedFocusId = null, menuNode = null;
+function setPinnedFocus(nodeId) {
+  if (nodeId !== null && !Number.isInteger(nodeId)) throw new TypeError('Expected a pinned node ID or null');
+  if (destroyed) return;
+  pinnedFocusId = nodeId;
+  menu.querySelector('[data-a="pinFocus"]').textContent = menuNode?.id === pinnedFocusId ? 'Unpin Focus' : 'Pin Focus';
+}
 function openMenu(n, b) {
-  menuT = sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
+  menuNode = n; menuT = sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
+  const placeholder = !subscribers.get('pinFocus').size || n === phNode && phOwner && phOwner.children.length === 1 && !n.text && !n.children.length;
+  menu.querySelector('[data-a="pinFocus"]').hidden = placeholder;
+  menu.querySelector('[data-group="pin"]').hidden = placeholder; setPinnedFocus(pinnedFocusId);
   // Owner V1.1 override of the historical full-menu requirement: use actual subtree depth,
   // not the currently expanded/search-filtered rows. Selected roots share one menu policy.
   const hasChildren = menuT.some(n => n.children.length), hasGrandchildren = menuT.some(n => n.children.some(c => c.children.length));
   menu.querySelectorAll('[data-a="expand"],[data-a="collapse"]').forEach(b => { b.hidden = !hasGrandchildren; });
   menu.querySelector('[data-a="exportVis"]').hidden = !hasChildren;
-  const separators = menu.querySelectorAll('.sep'); separators[0].hidden = !hasGrandchildren; separators[1].hidden = !hasChildren;
-  topMenu.classList.remove('show'); menu.style.left = Math.min(r.left, innerWidth - 190) + 'px'; menu.style.top = Math.min(r.bottom, innerHeight - 175) + 'px'; menu.classList.add('show');
+  menu.querySelector('[data-group="branches"]').hidden = !hasGrandchildren;
+  menu.querySelector('[data-group="export"]').hidden = !hasChildren;
+  topMenu.classList.remove('show'); positionMenu(menu, r);
 }
 const setOpen = (n, o) => { if (n.children.length) setNodeOpen(n, o); n.children.forEach(c => setOpen(c, o)); };
 menu.onclick = e => {
   const a = e.target.dataset.a; if (!a) return; menu.classList.remove('show');
-  if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
+  if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
+  else if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
 };
 listen(document, 'click', e => { if (menu.classList.contains('show') && !menu.contains(e.target)) menu.classList.remove('show'); if (topMenu.classList.contains('show') && !topMenu.contains(e.target)) topMenu.classList.remove('show'); });
 
@@ -1176,18 +1261,31 @@ async function exportText(list, visible) { const s = toText(list, visible); toas
 // Escape closes whichever menu is open (top menu or bullet menu).
 listen(document, 'keydown', e => { if (!ownsEvent(e)) return; if (e.key === 'Escape') { topMenu.classList.remove('show'); menu.classList.remove('show'); } });
 function setAll(open) { (function w(n) { n.children.forEach(c => { if (c.children.length) setNodeOpen(c, open); w(c); }); })(zoom); render(); }
+// Measure actual menu height; long menus remain reachable in a short visual viewport.
+function positionMenu(target, anchor, top = false) {
+  const v = window.visualViewport, left = v ? v.offsetLeft : 0, y = v ? v.offsetTop : 0;
+  const width = v ? v.width : innerWidth, height = v ? v.height : innerHeight, margin = 8;
+  target.style.maxHeight = Math.max(1, height - margin * 2) + 'px';
+  target.style.maxWidth = Math.max(1, width - margin * 2) + 'px';
+  target.style.right = 'auto'; target.classList.add('show');
+  const r = target.getBoundingClientRect();
+  target.style.left = Math.max(left + margin, Math.min(top ? anchor.right - r.width : anchor.left, left + width - r.width - margin)) + 'px';
+  target.style.top = Math.max(y + margin, Math.min(anchor.bottom + (top ? 4 : 0), y + height - r.height - margin)) + 'px';
+}
 const topMenu = container.querySelector('#ol-topMenu'), moreBtn = container.querySelector('#ol-moreBtn');
 moreBtn.onclick = e => {
   e.stopPropagation(); menu.classList.remove('show');
-  const r = moreBtn.getBoundingClientRect();
-  topMenu.style.left = 'auto'; topMenu.style.right = Math.max(8, innerWidth - r.right) + 'px'; topMenu.style.top = r.bottom + 4 + 'px';
-  topMenu.classList.toggle('show');
+  if (topMenu.classList.contains('show')) topMenu.classList.remove('show');
+  else positionMenu(topMenu, moreBtn.getBoundingClientRect(), true);
 };
 topMenu.onclick = e => {
   const a = e.target.dataset.a; if (!a) return; topMenu.classList.remove('show');
   if (a === 'mode') { mode = e.target.dataset.m; topMenu.querySelectorAll('[data-m]').forEach(b => b.classList.toggle('on', b === e.target)); render(); }
   else if (a === 'clearAll') clearAll();
-  else if (a === 'expandAll') setAll(true); else if (a === 'collapseAll') setAll(false); else exportText(null, a === 'exportVis');
+  else if (a === 'expandAll') setAll(true); else if (a === 'collapseAll') setAll(false);
+  // Current owner override: Export Focus retains historical zoom scope; Export All uses Home.
+  else if (a === 'exportAll') exportText(root.children, false);
+  else if (a === 'exportFocus' || a === 'exportVis') exportText(null, a === 'exportVis');
 };
 
 // Clear the complete Home tree, with one history entry even after recent typing.
@@ -1523,7 +1621,7 @@ if (!persistRequested) {
   try { const request = navigator.storage?.persist?.(); if (request && typeof request.catch === 'function') request.catch(() => {}); } catch (_) {}
 }
 initializePublication();
-return { on, getSnapshot, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory };
+return { on, getSnapshot, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus };
 }
-window.Outliner = { version: '1.7.5', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history'], mount };
+window.Outliner = { version: '1.8.0', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1'], mount };
 })();
