@@ -1,4 +1,4 @@
-/* Outliner version 1.7.5 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.8.2 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 const originalHeader = String.raw`<!-- OUTLINER (WorkFlowy style outliner) - one self-contained file. READ THIS BEFORE EDITING.
      Every REQUIREMENT comment records something the owner explicitly asked for.
@@ -93,7 +93,8 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .menu button[data-m].on::before{content:"✓"}
 .moa-outliner .arrow{position:absolute;left:-13px;top:0;width:16px;height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:26px;opacity:0;transition:transform .12s,opacity .12s}
 .moa-outliner .row:hover .arrow,.moa-outliner .arrow:focus-visible{opacity:1}
-.moa-outliner .arrow.open{transform:rotate(90deg)}.moa-outliner .arrow.hide{visibility:hidden}
+.moa-outliner:not(.ipad-safari) .arrow span{display:block;line-height:1;transition:transform .12s}
+.moa-outliner:not(.ipad-safari) .arrow.open span{transform:rotate(90deg)}.moa-outliner .arrow.hide{visibility:hidden}
 .moa-outliner .bullet{width:22px;height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .moa-outliner .bullet i{width:7px;height:7px;border-radius:50%;background:var(--ink);opacity:.75}
 .moa-outliner .bullet:hover i{opacity:1}
@@ -588,13 +589,13 @@ function appendHistory(entry) {
   hi = hist.length - 1;
 }
 let typingSnapshot = null;
-function record(x = snap()) {
+function record(x = snap(), settleTyping = false) {
   const pending = tm && typingSnapshot; clearTimeout(tm); tm = null; typingSnapshot = null;
   // Owner V1.1 exception: a changed zoom is an outline history step, even with identical text.
   if (historyHost) {
     if (x === outlineValue(hist[outlineHistoryIndex()])) return;
     let focus = null;
-    if (!historyBusy && typeof historyHost.reconcileFocus === 'function') {
+    if ((!historyBusy || settleTyping) && typeof historyHost.reconcileFocus === 'function') {
       try {
         const d = JSON.parse(x), edge = historyHost.reconcileFocus({zoomId:d.zoom===d.root.id?null:d.zoom,tree:d.root.children});
         if (edge) {
@@ -619,12 +620,18 @@ function detachedHostValue(value) {
 }
 function commitHostHistory(edge) {
   if (!historyHost || destroyed || !container.isConnected || historyBusy || historyComposing || historyPreparing && historyPreparedCommit) return false;
-  let before, after;
-  try { before = detachedHostValue(edge.before); after = detachedHostValue(edge.after); } catch (_) { return false; }
-  if (!edge.force && JSON.stringify(before) === JSON.stringify(after)) return false;
   historyBusy = true;
   try {
-    if (tm) record();
+    // Pending typing is a new change, even while this command is guarded against reentry.
+    if (tm) record(snap(), true);
+    if (destroyed || !historyHost) return false;
+    let before, after, prepared;
+    try {
+      // Optional capture observes any pin removal caused by settling the outline first.
+      prepared = typeof edge.capture === 'function' ? edge.capture() : edge;
+      before = detachedHostValue(prepared.before); after = detachedHostValue(prepared.after);
+    } catch (_) { return false; }
+    if (!edge.force && JSON.stringify(before) === JSON.stringify(after)) return false;
     if (!historyCallback('apply', detachedHostValue(after)) || destroyed) return false;
     appendHistory({ before, after });
     if (historyPreparing) historyPreparedCommit = true;
@@ -639,7 +646,8 @@ function runHistory(direction) {
   if (!ready || destroyed || !historyHost) return false;
   historyBusy = true;
   try {
-    if (tm) record();
+    if (tm) record(snap(), true);
+    if (destroyed || !historyHost) return false;
     const next = direction === 'undo' ? hi - 1 : hi + 1;
     if (next < 0 || next >= hist.length) return false;
     const edge = hist[direction === 'undo' ? hi : next];
@@ -980,7 +988,7 @@ function row(n, inSel, d) {
   const r = el('div', 'row'); const selOn = inSel || sel.has(n); if (selOn) r.classList.add('sel'); els.set(n, r);
   setLevel(r, base + d);
   const ar = el('button', 'arrow' + (n.children.length ? '' : ' hide') + (isOpen(n) ? ' open' : ''));
-  if (ipadSafari) { const glyph = document.createElement('span'); glyph.textContent = '▸'; ar.appendChild(glyph); } else ar.textContent = '▸'; ar.tabIndex = -1; ar.title = 'Collapse / expand (Ctrl+click: all levels)';
+  const glyph = document.createElement('span'); glyph.textContent = '▸'; ar.appendChild(glyph); ar.tabIndex = -1; ar.title = 'Collapse / expand (Ctrl+click: all levels)';
   // REQUIREMENT: Ctrl/Cmd+click on the triangle = expand all / collapse all for this bullet and everything below it.
   // The click must not select the row (see the row mousedown handler below, which skips the arrow).
   // Ctrl/Cmd+click expands or collapses this bullet and everything under it.
@@ -1623,5 +1631,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus };
 }
-window.Outliner = { version: '1.8.0', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1'], mount };
+window.Outliner = { version: '1.8.2', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1'], mount };
 })();

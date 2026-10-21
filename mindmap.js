@@ -1,12 +1,13 @@
-/* MindMap 1.8.0 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.9.1 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
 (function(){
 'use strict';
+const DEFAULT_BRANCH_SCALE=2.5,MIN_BRANCH_SCALE=1,MAX_BRANCH_SCALE=5;
 function mount(container,opts={}){
   if(!(container instanceof Element))throw new TypeError('MindMap.mount requires an Element');
-  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceStats=null,sourceReady=false,rtimer=null;
+  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceStats=null,sourceReady=false,rtimer=null,sourceRevision=0;
   const timers=new Set(),frames=new Set(),listeners=[],objectURLs=new Set();
   const hadClass=container.classList.contains('moa-mindmap'),hadCoveredClass=container.classList.contains('map-covered');
   container.classList.add('moa-mindmap');
@@ -42,17 +43,21 @@ function mount(container,opts={}){
   listen(fontLink,'error',()=>reportError(new Error('Sarabun font stylesheet failed to load. Canvas uses the original fallback font.')));
   listen(fontLink,'load',()=>loadFonts());
   if(ownsFont)document.head.appendChild(fontLink);
+const layoutTransitions=new WeakMap();
 function createLayoutPreferences(){
+let branchScale=DEFAULT_BRANCH_SCALE;
 let hlimitInf=true,hlimitN=3,d1Max=Infinity,wrapBoundsReady=false;
-let rootEnabled=false,rootCount=3,rootFollowMax=false,visibleRootCount=0;
+let rootEnabled=false,rootCount=3,rootFollowMax=false,visibleRootCount=0,rootOrder='down';
 const rootMaximum=()=>Math.max(1,visibleRootCount-1);
 const rootEffective=()=>rootFollowMax?rootMaximum():Math.min(rootCount,rootMaximum());
 let levelsEnabled=false,levelsN=1,siblingLimitEnabled=true,siblingLimitN=3,branchDepthMax=1,branchSiblingMax=1,branchBoundsReady=false,levelsCountChosen=false,siblingCountChosen=false;
 function hlimitCap(d){return Math.max(1,d-1);}
 function apply(partial){
+  if((typeof partial.branchScale==='number'||typeof partial.branchScale==='string'&&partial.branchScale.trim()!=='')&&Number.isFinite(Number(partial.branchScale)))branchScale=clamp(Math.round((Number(partial.branchScale)+Number.EPSILON)*100),MIN_BRANCH_SCALE*100,MAX_BRANCH_SCALE*100)/100;
   const outer=partial.rootLayout;
   if(outer&&typeof outer==='object'){
     if(typeof outer.enabled==='boolean')rootEnabled=outer.enabled;
+    if(outer.order==='down'||outer.order==='across')rootOrder=outer.order;
     if('count' in outer){const n=Number(outer.count);if(Number.isFinite(n)&&Number.isSafeInteger(Math.round(n))&&n>0){rootCount=Math.max(1,Math.round(n));if(!('followMax' in outer))rootFollowMax=visibleRootCount>=2&&rootCount===rootMaximum();}}
     if(typeof outer.followMax==='boolean')rootFollowMax=outer.followMax;
   }
@@ -96,10 +101,12 @@ function observeBlank(sourceReady,sourceStats){
   updateBranchBounds(null,sourceReady,sourceStats);visibleRootCount=0;
 if(d1Max!==1||sourceReady&&!wrapBoundsReady){d1Max=1;if(hlimitN>1)hlimitN=1;}if(sourceReady)wrapBoundsReady=true;
 }
-function getSettingBounds(){return{rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
-function getSettings(){return{rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
+function getSettingBounds(){return{branchScale:{min:MIN_BRANCH_SCALE,max:MAX_BRANCH_SCALE,step:0.1,precision:2,default:DEFAULT_BRANCH_SCALE},rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
+function getSettings(){return{branchScale,rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax,order:rootOrder},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
 return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,
+  get branchScale(){return branchScale;},
   get rootEnabled(){return rootEnabled;},
+  get rootOrder(){return rootOrder;},
   get rootEffective(){return rootEffective();},
   get hlimitInf(){return hlimitInf;},
   get hlimitN(){return hlimitN;},
@@ -115,7 +122,7 @@ function safeFileName(label){
 }
 
 const C={
-  BASE_FONT:10,RATIO:2.5,LINE_H:1.5,DESC_GAP_R:0.25,DESC_WRAP_EM:28,
+  BASE_FONT:10,RATIO:DEFAULT_BRANCH_SCALE,LINE_H:1.5,DESC_GAP_R:0.25,DESC_WRAP_EM:28,
   GAP_R:0.75,SUB_GAP_R:0.20125,CHILD_STEP_R:0.85,RISE_PAD_R:0.70,LOWER_THAI_CHILD_R:1.5,LOWER_THAI_FANOUT_FRAC:0.5,
   D0_D1_GAP_MULT:1.145,D1_TXT_PAD_R:0.105,
   D1_ROW_GAP_R:0.195,SIBLING_GAP_R:0.135,D1_ARM_FLOOR_R:0.5,
@@ -140,8 +147,8 @@ const C={
 
 const SNAP_AMBIG_THRESH=0.30;
 const TREE_PAD_FRAC=0.08;
-const lnW=(d,MD)=>d<=0?0:C.BASE_LINE*Math.pow(C.RATIO,MD-d);
-const cgap=(d,MD)=>C.BASE_GAP*Math.pow(C.RATIO,MD-d);
+const lnW=(d,MD)=>d<=0?0:C.BASE_LINE*Math.pow(layoutPreferences.branchScale,MD-d);
+const cgap=(d,MD)=>C.BASE_GAP*Math.pow(layoutPreferences.branchScale,MD-d);
 
 /* ══ COLOR ══ */
 function hsl(h,s,l){
@@ -227,7 +234,7 @@ function flagPlaceholders(root,indexes){
 
 /* ══ MEASURE ══ */
 const _mc=document.createElement('canvas'),_cx=_mc.getContext('2d');
-const fsz=(d,MD)=>Math.max(C.BASE_FONT,C.BASE_FONT*Math.pow(C.RATIO,MD-d));
+const fsz=(d,MD)=>Math.max(C.BASE_FONT,C.BASE_FONT*Math.pow(layoutPreferences.branchScale,MD-d));
 const fwt=d=>d<=2?'bold':'normal';
 function mW(lbl,f,w){const s=Math.min(f,C.MAX_SAFE_FONT);_cx.font=`${w} ${s}px ${C.FONT}`;return _cx.measureText(lbl).width*(f/s);}
 const _capFracCache=new Map();
@@ -272,12 +279,16 @@ function wrapDescriptionLine(text,fs){
   if(line||!lines.length)lines.push(line);
   return lines;
 }
+function descriptionSize(node,MD){
+  // Preserve the original arithmetic at the default scale, including its minimum.
+  return layoutPreferences.branchScale===DEFAULT_BRANCH_SCALE?fsz(node.depth+2,MD):node.fs/(C.RATIO*C.RATIO);
+}
 function measureTextBlock(node,MD){
   const title=inkMetrics(node.label,node.fs,node.fw),baseline=node.fs*C.BASELINE_FRAC;
   const runs=[{text:node.label,fs:node.fs,fw:node.fw,x:0,baseline,...title,description:false}];
   let width=title.width,bottom=node.fs;
   if(node.description!==undefined){
-    const fs=fsz(node.depth+2,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n').flatMap(line=>wrapDescriptionLine(line,fs));
+    const fs=descriptionSize(node,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n').flatMap(line=>wrapDescriptionLine(line,fs));
     let previous=null;
     for(const text of lines){
       const ink=inkMetrics(text,fs,'normal');
@@ -566,15 +577,36 @@ function layout(root,colorSeed){
   root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
   const trees=roots.map(n=>{const lay=layoutTree(n,MD,colorSeed,false);lay.hasDescriptions=hasDescription(n);return lay;});
   const boxes=trees.map(contentBounds),cols=layoutPreferences.rootEnabled?Math.min(layoutPreferences.rootEffective,trees.length):trees.length;
-  const base=Math.floor(trees.length/cols),extra=trees.length%cols;
-  let index=0,x=C.LEFT_M;
-  for(let c=0;c<cols;c++){
-    const size=base+(c<extra?1:0),end=index+size;let y=C.TOP_M,width=0;
-    for(;index<end;index++){
-      const lay=trees[index],box=boxes[index];translateLayout(lay,x-box.x,y-box.y);width=Math.max(width,box.w);y+=box.h;
-      if(index+1<end)y+=d1RowGap(trees[index+1].root);
+  if(layoutPreferences.rootEnabled&&layoutPreferences.rootOrder==='across'){
+    // Placement indexes leave canonical preorder, color traversal and PDF order intact.
+    const rows=Array.from({length:Math.ceil(trees.length/cols)},(_,r)=>Array.from({length:Math.min(cols,trees.length-r*cols)},(_,c)=>r*cols+c));
+    const widths=Array.from({length:cols},(_,c)=>Math.max(...rows.filter(row=>c<row.length).map(row=>boxes[row[c]].w)));
+    const xs=[C.LEFT_M];
+    for(let c=1;c<cols;c++){
+      const gap=Math.max(...rows.filter(row=>c<row.length).map(row=>d1ColGap([trees[row[c-1]].root],[trees[row[c]].root],armLen(trees[row[c]].root.depth,MD))));
+      xs[c]=xs[c-1]+widths[c-1]+gap;
     }
-    if(c+1<cols)x+=width+d1ColGap([trees[end-1].root],[trees[end].root],armLen(trees[end].root.depth,MD));
+    const gridWidth=xs[cols-1]+widths[cols-1]-C.LEFT_M;
+    let y=C.TOP_M;
+    rows.forEach((row,r)=>{
+      const left=xs[0]+(widths[0]-boxes[row[0]].w)/2,last=row.length-1;
+      const right=xs[last]+(widths[last]+boxes[row[last]].w)/2;
+      const shift=row.length<cols?C.LEFT_M+gridWidth/2-(left+right)/2:0;
+      for(const [c,i]of row.entries())translateLayout(trees[i],xs[c]+(widths[c]-boxes[i].w)/2+shift-boxes[i].x,y-boxes[i].y);
+      y+=Math.max(...row.map(i=>boxes[i].h));
+      if(r+1<rows.length)y+=Math.max(...rows[r+1].map(i=>d1RowGap(trees[i].root)));
+    });
+  }else{
+    const base=Math.floor(trees.length/cols),extra=trees.length%cols;
+    let index=0,x=C.LEFT_M;
+    for(let c=0;c<cols;c++){
+      const size=base+(c<extra?1:0),end=index+size,width=Math.max(...boxes.slice(index,end).map(box=>box.w));let y=C.TOP_M;
+      for(;index<end;index++){
+        const lay=trees[index],box=boxes[index];translateLayout(lay,x+(width-box.w)/2-box.x,y-box.y);y+=box.h;
+        if(index+1<end)y+=d1RowGap(trees[index+1].root);
+      }
+      if(c+1<cols)x+=width+d1ColGap([trees[end-1].root],[trees[end].root],armLen(trees[end].root.depth,MD));
+    }
   }
   const lay={root,MD,trees,hasDescriptions:described,d1Mode:'forest'};const box=contentBounds(lay);
   lay.pW=box.x+box.w+C.RIGHT_M;lay.pH=box.y+box.h+C.BOT_M;return lay;
@@ -1209,9 +1241,41 @@ function fitTarget(kbH){
 function autoFit(){if(paused||!st.lay)return;const t=fitTarget();st.scale=t.scale;st.panX=t.panX;st.panY=t.panY;}
 function preserveViewportAcrossLayoutChange(prevLay,newLay){
   const aOld=contentBounds(prevLay),aNew=contentBounds(newLay);
-  const k=Math.pow(C.RATIO,newLay.MD-prevLay.MD);
+  const k=Math.pow(layoutPreferences.branchScale,newLay.MD-prevLay.MD);
   const sOld=st.scale,sNew=sOld/k;
   st.panX+=sOld*aOld.x-sNew*aNew.x;st.panY+=sOld*aOld.y-sNew*aNew.y;st.scale=sNew;
+}
+// Scale transitions use real-node preorder only within the same accepted source revision.
+function preserveViewportAcrossScaleChange(prevLay,newLay){
+  const r=viewportRect(),zoom=st.scale;
+  if(!(r.width>0&&r.height>0&&Number.isFinite(zoom)&&zoom>0))return;
+  const center={x:r.left+r.width/2,y:r.top+r.height/2},world={x:(center.x-st.panX)/zoom,y:(center.y-st.panY)/zoom};
+  const realNodes=lay=>{const nodes=[];const walk=n=>{if(!n.synthetic)nodes.push(n);n.children.forEach(walk);};walk(lay.root);return nodes;};
+  const previous=layoutTransitions.get(prevLay),next=layoutTransitions.get(newLay);
+  let anchor=null;
+  if(previous?.revision===next?.revision){
+    const nodes=realNodes(prevLay),right=(r.left+r.width-st.panX)/zoom,bottom=(r.top+r.height-st.panY)/zoom,left=(r.left-st.panX)/zoom,top=(r.top-st.panY)/zoom;
+    nodes.forEach((node,index)=>{for(const run of node.textBlock.runs){
+      const x0=node.x+run.x-run.left,x1=node.x+run.x+Math.max(run.width,run.right),y0=node.y+run.baseline-run.ascent,y1=node.y+run.baseline+run.descent;
+      if(x1<left||x0>right||y1<top||y0>bottom)continue;
+      const dx=Math.max(x0-world.x,0,world.x-x1),dy=Math.max(y0-world.y,0,world.y-y1),distance=dx*dx+dy*dy,centerDistance=Math.pow((x0+x1)/2-world.x,2)+Math.pow((y0+y1)/2-world.y,2);
+      if(!anchor||distance<anchor.distance||distance===anchor.distance&&(centerDistance<anchor.centerDistance||centerDistance===anchor.centerDistance&&index<anchor.index))anchor={node,index,distance,centerDistance};
+    }});
+  }
+  let scale=zoom,panX,panY;
+  const node=anchor&&realNodes(newLay)[anchor.index];
+  if(node&&node.fs>0&&Number.isFinite(node.fs)){
+    scale=zoom*anchor.node.fs/node.fs;
+    panX=st.panX+zoom*anchor.node.x-scale*node.x;
+    panY=st.panY+zoom*(anchor.node.y+anchor.node.fs*C.BASELINE_FRAC)-scale*(node.y+node.fs*C.BASELINE_FRAC);
+  }else{
+    const oldBounds=previous?.bounds||contentBounds(prevLay),newBounds=next?.bounds||contentBounds(newLay);
+    const u=(world.x-oldBounds.x)/oldBounds.w,v=(world.y-oldBounds.y)/oldBounds.h;
+    panX=center.x-zoom*(newBounds.x+u*newBounds.w);panY=center.y-zoom*(newBounds.y+v*newBounds.h);
+  }
+  if(![scale,panX,panY].every(Number.isFinite)||scale<=0)return;
+  cancelAnimationFrame(_raf);_raf=null;cancelAnimationFrame(kbLift.animId);kbLift.animId=null;
+  st.scale=scale;st.panX=panX;st.panY=panY;
 }
 let _raf=null;
 const easeOut3=p=>1-Math.pow(1-p,3);
@@ -1250,7 +1314,8 @@ function redraw(){draw();}
 /* ══ ZOOM & PAN ══ */
 function markTouched(){const latest=liveInsets;cancelLiveViewport();uiState.userTouchedCanvas=true;if(latest)applyViewportInsets(latest,{duration:0});cancelAnimationFrame(_raf);_raf=null;cancelAnimationFrame(kbLift.animId);kbLift.animId=null;}
 function zoomAt(cx,cy){
-  const f=2.5,ns=st.scale*f;
+  const f=Math.max(2.5,layoutPreferences.branchScale);
+  const ns=st.scale*f;
   const tx=cx-(cx-st.panX)*(ns/st.scale),ty=cy-(cy-st.panY)*(ns/st.scale);
   const s0=st.scale,x0=st.panX,y0=st.panY,t0=performance.now();
   cancelAnimationFrame(_raf);
@@ -1333,7 +1398,12 @@ function render(){
   flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts);layoutPreferences.observeRoot(root,sourceReady,sourceStats);
   const prevLay=st.lay;
   st.lay=layout(root,uiState.colorSeed);st.lay.hasDescriptions=!!(sourceNodeTexts&&sourceNodeTexts.some(text=>text.includes('\n')));pendingColor=false;emptyEl.style.display='none';
-  if(uiState.userTouchedCanvas&&prevLay&&st.lay.MD!==prevLay.MD)preserveViewportAcrossLayoutChange(prevLay,st.lay);
+  const bounds=contentBounds(st.lay);fitBounds.set(st.lay,bounds);
+  layoutTransitions.set(st.lay,{scale:layoutPreferences.branchScale,revision:sourceRevision,bounds});
+  if(uiState.userTouchedCanvas&&prevLay){
+    if(layoutTransitions.get(prevLay)?.scale!==layoutPreferences.branchScale)preserveViewportAcrossScaleChange(prevLay,st.lay);
+    else if(st.lay.MD!==prevLay.MD)preserveViewportAcrossLayoutChange(prevLay,st.lay);
+  }
   if(!holdDrawing&&canvas.clientWidth>0&&canvas.clientHeight>0&&!uiState.userTouchedCanvas)autoFit();
   draw();
 }
@@ -1354,7 +1424,7 @@ function setText(text,options={}){
     stats={maxDepth:value.maxDepth,maxSiblings:value.maxSiblings};
   }
   if(text===sourceText&&placeholders.join(',')===sourcePlaceholders.join(',')&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats))return;
-  sourceStats=stats;sourceReady=true;
+  sourceRevision++;sourceStats=stats;sourceReady=true;
   sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;if(!text.trim())flushRender();else schedRender();
 }
 function getSettingBounds(){return layoutPreferences.getSettingBounds();}
@@ -1362,8 +1432,10 @@ function getSettings(){return{...layoutPreferences.getSettings(),colorSeed:uiSta
 function setSettings(partial={}){
   if(destroyed)return getSettings();
   if(!paused&&rtimer!==null)flushRender();
+  const before=JSON.stringify(getSettings());
   layoutPreferences.apply(partial);
   if('colorSeed' in partial){const v=String(partial.colorSeed).trim();if(v!=='')uiState.colorSeed=Math.max(0,parseInt(v,10)||0);}
+  if(before===JSON.stringify(getSettings()))return getSettings();
   flushRender();
   if(!paused&&!uiState.userTouchedCanvas&&st.lay&&canvas.clientWidth>0&&canvas.clientHeight>0)animateFit(300);
   return getSettings();
@@ -1478,5 +1550,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed};
 }
-window.MindMap={version:'1.8.0',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1'],mount};
+window.MindMap={version:'1.9.1',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1','root-order-v1','branch-scale-v1'],mount};
 })();

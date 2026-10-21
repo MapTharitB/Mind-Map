@@ -72,6 +72,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 .wrap-check input{width:18px;height:18px;margin:0;accent-color:var(--accent)}
 #map-options .sep{border-top:1px solid var(--map-sync-border);margin:16px 0}
 #map-options .shell-button{height:44px;margin:0;padding:0 8px;width:100%;font-size:12px}
+#map-options .square-reset{display:flex;align-items:center;justify-content:center;padding:0}
 #download-pdf{display:block}
 #divider{position:absolute;top:0;bottom:0;width:12px;max-width:calc(100% - var(--divider-boundary,0px));z-index:24;cursor:ew-resize;touch-action:none;outline:0}
 #divider::after{content:"";position:absolute;top:0;bottom:0;left:0;width:2px;background:var(--line)}
@@ -84,7 +85,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 
 
 /* Approved compact layout menu: all rows share label / control / checkbox columns. */
-#settings-controls:not([hidden]){display:grid;grid-template-columns:48px minmax(0,1fr) 44px;gap:12px}
+#settings-controls:not([hidden]){display:grid;grid-template-columns:48px minmax(0,1fr) 44px;gap:12px;margin-bottom:12px}
 #settings-controls .option-row,#settings-controls .wrap-controls{display:contents}
 #settings-controls .option-row[hidden]{display:none}
 #settings-controls .option-label{white-space:nowrap;align-self:center}
@@ -95,6 +96,16 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 .layout-hint{font-size:11px;color:var(--mute)}
 #settings-controls .layout-hint[hidden],#settings-controls .section-title[hidden]{display:none}
 
+.root-order{grid-column:1/-1;display:flex;min-width:0;height:31px;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--btn);overflow:hidden}
+.root-order label{position:relative;display:flex;flex:1 1 50%;min-width:0;align-items:center;justify-content:center;cursor:pointer;font-size:12px}
+.root-order label+label{border-left:1px solid var(--line)}
+.root-order input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+.root-order span{display:flex;align-items:center;justify-content:center;align-self:stretch;width:100%;border:1px solid transparent;color:var(--mute)}
+.root-order label:first-child span{border-radius:5px 0 0 5px}
+.root-order label:last-child span{border-radius:0 5px 5px 0}
+.root-order input:checked+span{background:var(--btn);border-color:var(--accent);color:var(--ink)}
+.root-order input:focus-visible+span{outline:2px solid var(--accent);outline-offset:-4px}
+.root-order input:disabled+span{opacity:.5;cursor:default}
 </style>
 </head>
 <body>
@@ -107,8 +118,12 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
       <button id="map-more" class="shell-button" aria-label="Map options" aria-expanded="false" aria-controls="map-options">⋯</button>
       <div id="map-options" hidden>
         <div id="settings-controls" hidden>
+          <div class="section-title scale-option" hidden>Branch Scale</div>
+          <div class="option-row scale-option" hidden><label class="option-label" for="branch-scale">SCALE</label><div class="stepper"><button id="scale-down" aria-label="Decrease Branch Scale">‹</button><input id="branch-scale" aria-label="Branch Scale" type="number" inputmode="decimal" min="1" max="5" step="0.01" value="2.5"><button id="scale-up" aria-label="Increase Branch Scale">›</button></div><button id="scale-reset" class="shell-button square-reset" aria-label="Reset branch scale">Reset</button></div>
+          <div class="sep scale-option" hidden></div>
           <div class="section-title root-option" hidden>Top-level layout</div>
           <div class="option-row root-option" hidden><label class="option-label" for="root-count">WRAP</label><div class="wrap-controls"><div class="stepper"><button id="root-down" aria-label="Decrease top-level Wrap count">‹</button><input id="root-count" aria-label="Top-level Wrap count" aria-describedby="root-hint" type="number" inputmode="numeric" min="1" step="1" value="3"><button id="root-up" aria-label="Increase top-level Wrap count">›</button></div><label class="wrap-check"><input id="root-enabled" type="checkbox" aria-label="Enable top-level Wrap" aria-describedby="root-hint"></label></div></div>
+          <div id="root-order" class="root-order" role="radiogroup" aria-label="Top-level order" hidden><label><input type="radio" name="root-order" id="root-order-down" value="down" checked><span>Down columns</span></label><label><input type="radio" name="root-order" id="root-order-across" value="across"><span>Across rows</span></label></div>
           <div id="root-hint" class="layout-hint root-option" hidden>Available when at least two top-level nodes are shown.</div>
           <div class="sep root-option" hidden></div>
           <div class="section-title">First-level branches</div>
@@ -120,7 +135,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
           <div class="option-row branch-option" hidden><label class="option-label" for="sibling-count">LIMIT</label><div class="stepper"><button id="limit-down" aria-label="Decrease sibling limit">‹</button><input id="sibling-count" aria-label="Maximum siblings in a horizontal group" type="number" inputmode="numeric" min="1" step="1" value="3"><button id="limit-up" aria-label="Increase sibling limit">›</button></div><label class="wrap-check"><input id="sibling-enabled" type="checkbox" aria-label="Enable sibling limit"></label></div>
           <div class="sep"></div>
           <div class="option-row"><span class="option-label">COLOR</span><button id="random-color" class="shell-button">Random</button><span aria-hidden="true"></span></div>
-          <div class="option-row"><label class="option-label" for="color-seed">SEED</label><div class="stepper"><button id="seed-down" aria-label="Decrease Seed">‹</button><input id="color-seed" type="number" inputmode="numeric" min="0" max="16777215" step="1" value="0"><button id="seed-up" aria-label="Increase Seed">›</button></div><span aria-hidden="true"></span></div>
+          <div class="option-row"><label class="option-label" for="color-seed">SEED</label><div class="stepper"><button id="seed-down" aria-label="Decrease Seed">‹</button><input id="color-seed" type="number" inputmode="numeric" min="0" max="16777215" step="1" value="0"><button id="seed-up" aria-label="Increase Seed">›</button></div><button id="seed-reset" class="shell-button square-reset" aria-label="Reset color seed">Reset</button></div>
           <div class="sep"></div>
         </div>
         <button id="download-pdf" class="shell-button" hidden>Download PDF</button>
@@ -152,8 +167,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.8.0' },
-  mindmap: { src: './mindmap.js', v: '1.8.0' }
+  outliner: { src: './outliner.js', v: '1.8.2' },
+  mindmap: { src: './mindmap.js', v: '1.9.1' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null) {
@@ -253,7 +268,8 @@ if(legacyPixels!==null)fraction=DEFAULT_FRACTION;
 let W=0,H=0,narrowPortrait=false,covered=false,paneControls=false;
 let layoutFrame=null,geometryGeneration=0;
 let widthFrame=null,drag=null,lastTap=null,geometryTarget=null,viewportLeft=0,suppressDoubleClickUntil=0;
-let settings={rootLayout:read('moa:map:rootLayout',{enabled:false,count:3,followMax:false},v=>v&&typeof v.enabled==='boolean'&&Number.isSafeInteger(v.count)&&v.count>=1&&typeof v.followMax==='boolean'),horizontalLimit:{enabled:read('moa:map:hlimitEnabled',false,bool),count:read('moa:map:hlimitCount',3,v=>Number.isInteger(v)&&v>0)},deeperHorizontal:{enabled:read('moa:map:deeperEnabled',false,bool),levels:read('moa:map:deeperLevels',1,v=>Number.isSafeInteger(v)&&v>=1)},siblingLimit:{enabled:read('moa:map:siblingLimitEnabled',true,bool),count:read('moa:map:siblingLimitCount',3,v=>Number.isSafeInteger(v)&&v>=1)},colorSeed:read('moa:map:colorSeed',0,v=>Number.isInteger(v)&&v>=0)};
+const branchScaleBounds={min:Number($('branch-scale').min),max:Number($('branch-scale').max)};
+let settings={branchScale:read('moa:map:branchScale',2.5,v=>typeof v==='number'&&Number.isFinite(v)&&v>=branchScaleBounds.min&&v<=branchScaleBounds.max),rootLayout:read('moa:map:rootLayout',{enabled:false,count:3,followMax:false},v=>v&&typeof v.enabled==='boolean'&&Number.isSafeInteger(v.count)&&v.count>=1&&typeof v.followMax==='boolean'),horizontalLimit:{enabled:read('moa:map:hlimitEnabled',false,bool),count:read('moa:map:hlimitCount',3,v=>Number.isInteger(v)&&v>0)},deeperHorizontal:{enabled:read('moa:map:deeperEnabled',false,bool),levels:read('moa:map:deeperLevels',1,v=>Number.isSafeInteger(v)&&v>=1)},siblingLimit:{enabled:read('moa:map:siblingLimitEnabled',true,bool),count:read('moa:map:siblingLimitCount',3,v=>Number.isSafeInteger(v)&&v>=1)},colorSeed:read('moa:map:colorSeed',0,v=>Number.isInteger(v)&&v>=0)};
 let outline=null, map=null, mapModule=null, dirty=true, lastProjection=null, syncFrame=null, settingsTimer=null, settingsPending=true;
 const mapVisible=()=>!covered && W>0 && H>0;
 function supports(cap, method) {return !!(map && mapModule.capabilities.includes(cap) && typeof map[method]==='function');}
@@ -339,7 +355,7 @@ function makeHistoryHost(){
     composingFields.delete(event.target);if(event.target===seedInput){seedComposing=false;if(seedBlurPending){seedBlurPending=false;queueMicrotask(()=>{if(!historyDisposed&&document.activeElement!==seedInput)settleSeedDraft();});}}
   },true);
   const actionStart=event=>{
-    const button=event.target.closest?.('#seed-down,#seed-up,#random-color,#ol-undoBtn,#ol-redoBtn');
+    const button=event.target.closest?.('#seed-down,#seed-up,#seed-reset,#random-color,#ol-undoBtn,#ol-redoBtn');
     if(button)blockedHistoryAction=seedComposing||composingFields.size||event.isComposing||event.keyCode===229?button:null;
   };
   historyListen(document,'pointerdown',actionStart,{capture:true,passive:true});
@@ -387,17 +403,18 @@ function createMapFocusController(){
     state={syncFocus:value.state.syncFocus,pinnedId:value.state.pinnedId};
     write('moa:map:focusState',state);present();scheduleSync();return true;
   }
-  function commit(after){
+  function commit(change){
     if(!seedHistory.enabled||!seedHistory.settleSeedDraft())return false;
-    return outline.commitHostHistory({before:tag(state),after:tag(after)});
+    const capture=()=>({before:tag(state),after:tag(change({...state}))});
+    return outline.commitHostHistory({...capture(),capture});
   }
   function request({nodeId,action}){
     if(!Number.isInteger(nodeId)||!contains(outline.getSnapshot(),nodeId))return;
-    if(action==='pin')commit({...state,pinnedId:nodeId});
-    else if(action==='unpin'&&nodeId===state.pinnedId)commit({...state,pinnedId:null});
+    if(action==='pin')commit(current=>({...current,pinnedId:nodeId}));
+    else if(action==='unpin'&&nodeId===state.pinnedId)commit(current=>({...current,pinnedId:null}));
   }
   function topAction(){
-    if(state.pinnedId!==null)commit({syncFocus:false,pinnedId:null});
+    if(state.pinnedId!==null)commit(()=>({syncFocus:false,pinnedId:null}));
     else apply(tag({syncFocus:!state.syncFocus,pinnedId:null}));
   }
   function reconcile(snapshot){
@@ -429,6 +446,16 @@ function persistSettings(value) {
     $('root-count').value=rootBound?.effectiveCount??outer.count;$('root-count').disabled=!rootBound?.available||!outer.enabled;
     document.querySelectorAll('.root-option').forEach(row=>{row.style.opacity=rootBound?.available?'':'.5';});
   }
+  const scaleAvailable=supports('branch-scale-v1','getSettings')&&supports('branch-scale-v1','getSettingBounds')&&Number.isFinite(settings.branchScale);
+  document.querySelectorAll('.scale-option').forEach(row=>{row.hidden=!scaleAvailable;});
+  if(scaleAvailable){
+    write('moa:map:branchScale',settings.branchScale);
+    if(document.activeElement!==$('branch-scale')&&!scaleComposing)$('branch-scale').value=String(settings.branchScale);
+    $('scale-down').disabled=settings.branchScale<=branchScaleBounds.min;$('scale-up').disabled=settings.branchScale>=branchScaleBounds.max;
+  }
+  const ordering=outer&&supports('root-order-v1','getSettings');
+  $('root-order').hidden=!ordering;
+  for(const order of ['down','across']){const input=$('root-order-'+order);input.checked=(outer?.order||'down')===order;input.disabled=!ordering||!rootBound?.available||!outer.enabled||rootBound.effectiveCount===1;}
   const branch=supports('branch-layout-v1','getSettings')&&settings.deeperHorizontal&&settings.siblingLimit;
   const deeper=!!(branch&&settings.deeperHorizontal.enabled);
   $('hlimit-enabled').checked=settings.horizontalLimit.enabled;
@@ -735,7 +762,28 @@ $('sync-focus').addEventListener('click',()=>mapFocus.topAction());
 $('map-more').addEventListener('click',()=>{const open=$('map-options').hidden;$('map-options').hidden=!open;$('map-more').setAttribute('aria-expanded',String(open));if(open)refreshSettings();updateControlPlacement();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('.map-controls,#divider,.pane-action,#corner-toggle'))closeOptions();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('map-options').hidden){closeOptions();if(eligibleTarget($('map-more'),Math.max(0,displayedGeometry().width+displayedGeometry().left)))$('map-more').focus();}});
+let scaleComposing=false,scaleBlurPending=false;
+const scaleInput=$('branch-scale');
+function commitScale(delta=0,value=scaleInput.value){
+  if(scaleComposing||seedHistory.composing||!supports('branch-scale-v1','setSettings'))return;
+  const text=String(value).trim(),number=Number(text);
+  if(!text||!Number.isFinite(number)){scaleInput.value=String(settings.branchScale);return;}
+  const hundredths=Math.max(branchScaleBounds.min*100,Math.min(branchScaleBounds.max*100,Math.round((number+Number.EPSILON)*100)+delta));
+  if(hundredths!==Math.round(settings.branchScale*100))changeSettings({branchScale:hundredths/100});
+  scaleInput.value=String(settings.branchScale);
+}
+scaleInput.addEventListener('compositionstart',()=>{scaleComposing=true;});
+scaleInput.addEventListener('compositionend',()=>{scaleComposing=false;if(scaleBlurPending){scaleBlurPending=false;queueMicrotask(()=>{if(document.activeElement!==scaleInput)commitScale();});}});
+scaleInput.addEventListener('change',()=>commitScale());
+scaleInput.addEventListener('blur',()=>{if(scaleComposing){scaleBlurPending=true;return;}commitScale();});
+scaleInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229){event.preventDefault();commitScale();}});
+let blockedScaleAction=null;
+const scaleActionStart=event=>{const button=event.target.closest?.('#scale-down,#scale-up,#scale-reset');if(button)blockedScaleAction=scaleComposing||seedHistory.composing||event.isComposing||event.keyCode===229?button:null;};
+document.addEventListener('pointerdown',scaleActionStart,{capture:true,passive:true});
+document.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '||event.keyCode===229)scaleActionStart(event);},true);
+for(const [id,delta]of [['scale-down',-10],['scale-up',10],['scale-reset',0]])$(id).addEventListener('click',event=>{if(blockedScaleAction===event.currentTarget){blockedScaleAction=null;return;}commitScale(delta,id==='scale-reset'?2.5:scaleInput.value);});
 function changeSettings(partial) {flushSync();settingsPending=false;persistSettings(mapCall('setSettings',partial));}
+for(const order of ['down','across'])$('root-order-'+order).addEventListener('change',event=>{if(event.target.checked&&!event.target.disabled)changeSettings({rootLayout:{order}});});
 $('root-enabled').addEventListener('change',()=>{if(!$('root-enabled').disabled)changeSettings({rootLayout:{enabled:$('root-enabled').checked}});});
 $('hlimit-enabled').addEventListener('change',()=>{if(!$('hlimit-enabled').disabled)changeSettings({horizontalLimit:{enabled:$('hlimit-enabled').checked,count:$('hlimit-count').value},...($('hlimit-enabled').checked?{deeperHorizontal:{enabled:false}}:{})});});
 $('deeper-enabled').addEventListener('change',()=>{if(!$('deeper-enabled').disabled)changeSettings({deeperHorizontal:{enabled:$('deeper-enabled').checked},...($('deeper-enabled').checked?{horizontalLimit:{enabled:false}}:{})});});
@@ -792,6 +840,10 @@ for(const id of [...Object.keys(layoutNumbers),'color-seed']){
   $(id).addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229){event.preventDefault();commitNumber(id);}});
 }
 for(const [id,input,delta]of [...Object.entries(layoutNumbers).flatMap(([input,row])=>[[row.down,input,-1],[row.up,input,1]]),['seed-down','color-seed',-1],['seed-up','color-seed',1]])$(id).addEventListener('click',()=>commitNumber(input,delta));
+$('seed-reset').addEventListener('click',()=>{
+  if(seedHistory.enabled){if(!seedHistory.settleSeedDraft())return;seedHistory.commitSeed(0);}
+  else changeSettings({colorSeed:0});
+});
 $('random-color').addEventListener('click',()=>{
   if(seedHistory.enabled){if(!seedHistory.settleSeedDraft())return;seedHistory.commitSeed(Math.floor(Math.random()*0xFFFFFF),true);}
   else changeSettings({colorSeed:Math.floor(Math.random()*0xFFFFFF)});
