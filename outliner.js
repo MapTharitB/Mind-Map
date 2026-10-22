@@ -1,5 +1,174 @@
-/* Outliner version 1.8.2 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.11.2 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
+// One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
+function createNumericStepper(config){
+  const {button}=config,removers=[];
+  let active=null,observer=null,disposed=false,suppressClick=false;
+  function on(target,type,fn,options){
+    target.addEventListener(type,fn,options);
+    removers.push(()=>target.removeEventListener(type,fn,options));
+  }
+  function usable(){
+    const bound=config.bounds?.(),atLimit=active?.held&&bound&&Number(config.read())===(config.direction>0?bound.max:bound.min);
+    return !disposed&&button.isConnected&&(!button.disabled||atLimit)&&!document.hidden&&
+      button.getClientRects().length&&(!config.allowed||config.allowed());
+  }
+  function publishScale(a,value){
+    a.last=value;config.write(value);
+  }
+  function finish(){
+    const a=active;
+    if(!a)return;
+    active=null;observer?.disconnect();observer=null;
+    clearTimeout(a.timer);cancelAnimationFrame(a.frame);
+    if(a.held){
+      suppressClick=true;
+      if(config.scale&&a.latest!==a.last)publishScale(a,a.latest);
+      config.finish?.();
+    }
+    if(button.hasPointerCapture?.(a.id)){
+      try{button.releasePointerCapture(a.id);}catch(_){}
+    }
+  }
+  // Hold time and horizontal distance use the same value curve and publication budget.
+  function scaledValue(a,direction,seconds,drag=false){
+    const bounds=config.bounds(),elapsed=Math.max(0,seconds),ramp=Math.max(0,Math.min(1.4,elapsed-.3));
+    const delta=(drag?0:.01)+.5*Math.min(elapsed,.3)+.5*ramp+
+      (1.5/2.8)*ramp*ramp+2*Math.max(0,elapsed-1.7);
+    return config.valueAt?config.valueAt({startValue:a.value,direction,elapsedSeconds:elapsed,bounds,initialStep:!drag}):Math.max(bounds.min,Math.min(bounds.max,Math.round((a.value+direction*delta+Number.EPSILON)*100)/100));
+  }
+  function publishPending(a,now){
+    if(a.latest!==a.last&&now-a.publishedAt>=50){a.publishedAt=now;publishScale(a,a.latest);}
+  }
+  function drag(a,x){
+    const distance=x-a.dragX;
+    if(config.scale){
+      a.latest=scaledValue(a,Math.sign(distance),Math.abs(distance)/120,true);
+      publishPending(a,performance.now());
+      if(a.latest!==a.last&&!a.frame)a.frame=requestAnimationFrame(function flush(now){
+        a.frame=null;if(active!==a)return;if(!usable()){finish();return;}
+        publishPending(a,now);if(a.latest!==a.last)a.frame=requestAnimationFrame(flush);
+      });
+      const bounds=config.bounds();if(a.latest===bounds.min||a.latest===bounds.max){a.value=a.latest;a.dragX=x;}
+    }else{
+      const steps=Math.trunc(distance/12),delta=steps-a.dragSteps;
+      if(delta){config.step(Math.sign(delta),Math.abs(delta));a.dragSteps=steps;}
+    }
+  }
+  function beginDrag(a){
+    clearTimeout(a.timer);cancelAnimationFrame(a.frame);a.frame=null;
+    // Transition from the last visible value, without a second history session.
+    a.dragging=true;a.value=Number(config.read());a.last=a.latest=a.value;a.dragX=a.x;a.dragSteps=0;
+  }
+  function move(event){
+    const a=active;if(!a||event.pointerId!==a.id)return;
+    a.x=event.clientX;
+    if(!a.held)return;
+    if(!usable()){finish();return;}
+    if(!a.dragging&&Math.abs(a.x-a.pressX)>=8)beginDrag(a);
+    if(a.dragging){event.preventDefault();drag(a,a.x);}
+  }
+  function tick(now){
+    const a=active;
+    if(!a)return;
+    if(!usable()){finish();return;}
+    if(config.scale){
+      const elapsed=Math.max(0,(now-a.repeatAt)/1000);
+      a.latest=scaledValue(a,config.direction,elapsed);
+      publishPending(a,now);
+      a.frame=requestAnimationFrame(tick);
+    }else{
+      config.step(config.direction);
+      if(!usable()){finish();return;}
+      // Schedule from this tick, never catch up missed discrete steps.
+      a.timer=setTimeout(()=>{
+        if(active===a)a.frame=requestAnimationFrame(tick);
+      },100);
+    }
+  }
+  function startRepeat(a){
+    if(active!==a||!usable()){finish();return;}
+    if(config.start?.()===false){finish();return;}
+    a.held=true;a.value=Number(config.read());a.last=a.latest=a.value;
+    a.repeatAt=performance.now();a.publishedAt=a.repeatAt-50;
+    try{button.setPointerCapture(a.id);}catch(_){}
+    if(Math.abs(a.x-a.pressX)>=8)beginDrag(a);
+    else if(config.valueAt)tick(a.repeatAt);else a.frame=requestAnimationFrame(tick);
+  }
+  function press(event){
+    finish();suppressClick=false;
+    if(event.button!==0||event.isPrimary===false||event.isComposing||event.keyCode===229||!usable())return;
+    const a=active={id:event.pointerId,held:false,dragging:false,pressX:event.clientX,x:event.clientX,timer:null,frame:null};
+    // Only an active press observes DOM lifetime/availability changes.
+    observer=new MutationObserver(()=>{if(active&&!usable())finish();});
+    observer.observe(document.documentElement,{subtree:true,attributes:true,childList:true,
+      attributeFilter:['disabled','hidden','class','style']});
+    a.timer=setTimeout(()=>startRepeat(a),300);
+  }
+  function click(event){
+    if(suppressClick||!usable()){
+      suppressClick=false;event.preventDefault();event.stopImmediatePropagation();return;
+    }
+    config.step();
+  }
+  function key(event){
+    if(active)finish();
+    if(event.target!==button||![' ','Enter'].includes(event.key))return;
+    suppressClick=false;
+    if(event.repeat){event.preventDefault();event.stopImmediatePropagation();}
+  }
+  on(button,'pointerdown',press);on(button,'click',click,true);
+  on(window,'pointermove',move,{capture:true,passive:false});
+  for(const type of ['pointerup','pointercancel','lostpointercapture']){
+    on(window,type,event=>{if(active&&event.pointerId===active.id)finish();},true);
+  }
+  on(document,'pointerdown',event=>{
+    if(active&&(event.pointerId!==active.id||!button.contains(event.target)))finish();
+  },true);
+  on(document,'keydown',key,true);on(window,'blur',finish);
+  on(document,'visibilitychange',()=>{if(document.hidden)finish();});
+  return{finish,dispose(){
+    finish();disposed=true;observer?.disconnect();
+    removers.splice(0).forEach(remove=>remove());
+  }};
+}
+// One delegated selection binding per numeric UI root, including repeat clicks/taps.
+function bindNumericInputs(root){
+  const composing=new WeakSet(),onComposition=e=>{if(e.type==='compositionstart')composing.add(e.target);else composing.delete(e.target);};
+  const select=e=>{const input=e.target;if(input.matches?.('input[type="number"]')&&!input.disabled&&!composing.has(input)&&!e.isComposing)input.select();};
+  // Target listeners submit domain values first; this shared bubbling handler dismisses editing.
+  const submit=e=>{const input=e.target;if(e.key==='Enter'&&input.matches?.('input[type="number"]')&&!input.disabled&&!composing.has(input)&&!e.isComposing&&e.keyCode!==229){e.preventDefault();input.blur();}};
+  root.addEventListener('keydown',submit);
+  for(const type of ['focusin','click'])root.addEventListener(type,select);
+  for(const type of ['compositionstart','compositionend'])root.addEventListener(type,onComposition);
+  return{dispose(){root.removeEventListener('keydown',submit);for(const type of ['focusin','click'])root.removeEventListener(type,select);for(const type of ['compositionstart','compositionend'])root.removeEventListener(type,onComposition);}};
+}
+const MIN_MAP_SIZE=0.1,MAX_MAP_SIZE=1000,MAP_SIZE_UNITS=10000;
+function mapSizeUnits(value){
+  if(typeof value!=='number'||!Number.isFinite(value)||value<MIN_MAP_SIZE||value>MAX_MAP_SIZE)return null;
+  const scaled=value*MAP_SIZE_UNITS,units=Math.round(scaled);
+  return Math.abs(scaled-units)<=1e-7?units:null;
+}
+function normalizeMapSize(value){return Math.round(Math.max(MIN_MAP_SIZE,Math.min(MAX_MAP_SIZE,value))*MAP_SIZE_UNITS)/MAP_SIZE_UNITS;}
+function mapSizeAt({startValue,direction,elapsedSeconds,bounds,initialStep=true}){
+  const t=Math.max(0,elapsedSeconds),r=Math.max(0,Math.min(1.5,t-.5)),exponent=(initialStep?1:0)+4*t+4*r*r+12*Math.max(0,t-2);
+  const signed=Math.max(Math.log(bounds.min/startValue),Math.min(Math.log(bounds.max/startValue),direction*Math.log(1.1)*exponent));
+  return normalizeMapSize(startValue*Math.exp(signed));
+}
+function displayMapSize(value){return (Math.round(mapSizeUnits(value)/100)/100).toFixed(2);}
+function parseMapSizeDraft(text){
+  text=String(text).trim();if(!/^(?:[0-9]+(?:\.[0-9]{0,2})?|\.[0-9]{1,2})$/.test(text))return null;
+  const value=Number(text);return Number.isFinite(value)?normalizeMapSize(value):null;
+}
+function copyPresentation(from,to){delete to.mapSize;delete to.kind;if(from.mapSize!==undefined&&from.mapSize!==1)to.mapSize=mapSizeUnits(from.mapSize)/MAP_SIZE_UNITS;if(from.kind==='spacer')to.kind='spacer';return to;}
+function canMarkSpacer(node){
+  return node.kind!=='spacer'&&!node.children.length&&!node.text.includes('\n')&&/^[\s\u200b]*$/u.test(node.text);
+}
+function clearSpacerKind(node){
+  if(node.kind!=='spacer')return false;
+  delete node.kind;return true;
+}
+function validPresentation(node){return (node.mapSize===undefined||mapSizeUnits(node.mapSize)!==null)&&(node.kind===undefined||node.kind==='spacer'&&node.text===''&&node.children.length===0);}
 const originalHeader = String.raw`<!-- OUTLINER (WorkFlowy style outliner) - one self-contained file. READ THIS BEFORE EDITING.
      Every REQUIREMENT comment records something the owner explicitly asked for.
      Every DO NOT comment records something the owner rejected or that caused a real bug.
@@ -141,6 +310,31 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
   .moa-outliner .tools{order:2;flex:1 1 100%;justify-content:center}
 }`;
 // R2 is opt-in; standalone hosts keep their original toolbar.
+// Latest owner exception: reserve a stable trailing badge column; scrollport alone clears the centered divider.
+const presentationCSS=String.raw`
+.moa-outliner .page>.sheet{width:calc(100% - var(--outline-scrollport-inset,0px))}
+.moa-outliner .row>.tw,.moa-outliner .head>.tw{padding-right:58px;min-width:100px}
+.moa-outliner .tw>.hl{right:58px}
+.moa-outliner .map-size-badge{position:absolute;right:0;top:3px;width:54px;min-height:24px;text-align:center;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);font:12px/22px 'Cascadia Code',monospace;pointer-events:none}
+.moa-outliner .map-size-badge[hidden]{display:none}
+.moa-outliner .tw.map-size-active::before{content:"";position:absolute;left:-22px;right:0;top:0;height:max(var(--bh),var(--map-size-title-height,0px));border-radius:6px;background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
+.moa-outliner .head>.tw.map-size-active::before{left:0}
+.moa-outliner .row.sel>.tw.map-size-active::before,.moa-outliner .row.drop-in>.tw.map-size-active::before{display:none}
+.moa-outliner .spacer-editor>textarea::placeholder{color:var(--mute);font-style:italic}
+.moa-outliner #ol-menu{width:218px;min-width:218px;max-width:calc(100vw - 16px)}
+.moa-outliner #ol-menu button{min-height:40px}
+.moa-outliner .size-header{display:flex;align-items:center;height:40px;margin:0 8px}
+.moa-outliner .size-label{display:block;padding:5px 6px;color:var(--mute);font-size:12px}
+.moa-outliner .size-scope{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;font-size:12px;cursor:pointer}
+.moa-outliner .size-scope input{margin:0}
+.moa-outliner .size-controls{display:flex;gap:8px;align-items:center;margin:0 8px}
+.moa-outliner #ol-menu .size-stepper{display:flex;height:40px;border:1px solid var(--line);border-radius:6px;background:var(--btn);flex:1;min-width:0;overflow:hidden}
+.moa-outliner #ol-menu .size-stepper button{width:20px;min-width:20px;flex:1 1 20px;padding:0;text-align:center;font-size:20px}
+.moa-outliner .size-stepper input{width:calc(7ch + 8px);min-width:0;flex:none;padding:0 4px;border:0;background:none;color:var(--ink);text-align:center;font:13px 'Cascadia Code',monospace;-moz-appearance:textfield}
+.moa-outliner #ol-menu .size-stepper button{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.moa-outliner .size-stepper input::-webkit-inner-spin-button,.moa-outliner .size-stepper input::-webkit-outer-spin-button{-webkit-appearance:none}
+.moa-outliner #ol-menu #ol-size-reset{width:52px;flex:0 0 52px;padding:0;text-align:center;border:1px solid var(--line);background:var(--btn)}
+`;
 const paneCSS = String.raw`
 .moa-outliner.pane-controls .pane-actions{display:flex;flex:none;gap:0;align-items:center;order:0}
 .moa-outliner.pane-controls .pane-actions>#ol-moreBtn{order:0}
@@ -234,7 +428,7 @@ const template = String.raw`<div class="page">
 <!-- Owner override 2026-10-16 (R12-3A): Clear All first; then separated style, expand/collapse and export groups. Historical REQUIREMENT above is retained verbatim. -->
 <!-- Latest owner override 2026-10-16 (V1.1): styles first; Clear All last after a separator. Supersedes the earlier Clear-All-first override retained above. -->
 <div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
+<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="spacer" aria-keyshortcuts="Control+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
@@ -249,12 +443,19 @@ function encodeNodeText(text, depth) {
   return out.join('\n');
 }
 function decodeDescriptionOutline(text) {
-  const reject = { recognized: false }, raw = text.replace(/\r\n/g, '\n').split('\n');
+  // Accept one conventional terminal line ending; no extra trailing content.
+  if(/\[\/moa\](?:\r?\n)$/.test(text))text=text.replace(/\r?\n$/, '');
+  const raw = text.replace(/\r\n/g, '\n').split('\n');
+  // Only the first physical line can declare an extended document.
+  const reject = { recognized: false, attempted: /^ *\[\/?moa(?:\s|\])/.test(raw[0] || '') };
   if (!raw.length || raw.some(line => /\r/.test(line) || /^[ ]*\t/.test(line))) return reject;
   const common = Math.min(...raw.filter(line => line.length).map(line => line.match(/^ */)[0].length));
   if (!Number.isFinite(common) || common % 2) return reject;
-  const lines = raw.map(line => line.slice(common)), items = [], stack = [];
-  let owner = null, ownerDepth = -1, mayDescribe = false, recognized = false;
+  let lines = raw.map(line => line.slice(common)), extended=false,codecVersion=1;
+  const attempted=reject.attempted;
+  if(attempted){if(!['[moa v=1]','[moa v=2]'].includes(lines[0])||lines[lines.length-1]!=='[/moa]')return{...reject,attempted:true};codecVersion=lines[0]==='[moa v=2]'?2:1;extended=true;lines=lines.slice(1,-1);}
+  const items = [], stack = [];
+  let owner = null, ownerDepth = -1, mayDescribe = false, recognized = extended, mayPresent=false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i], match = /^( *)(- )(.*)$/.exec(line);
     if (match) {
@@ -262,10 +463,17 @@ function decodeDescriptionOutline(text) {
       if (!Number.isInteger(depth) || depth > stack.length) return reject;
       owner = { text: match[3], children: [] }; ownerDepth = depth;
       if (depth === 0) items.push(owner); else stack[depth - 1].children.push(owner);
-      stack.length = depth; stack.push(owner); mayDescribe = true; continue;
+      stack.length = depth; stack.push(owner); mayDescribe = true; mayPresent=extended; continue;
     }
     const prefix = '  '.repeat(ownerDepth + 1);
-    if (!owner || !mayDescribe || line !== prefix + '[desc]') return reject;
+    if(extended&&owner&&mayPresent&&line.startsWith(prefix+'[map')){
+      const metadata=/^\[map (spacer )?size=([0-9]+(?:\.[0-9]+)?)\]$/.exec(line.slice(prefix.length));
+      if(!metadata)return{...reject,attempted:true};const token=metadata[2],value=Number(token),units=mapSizeUnits(value);
+      if(units===null||(token.split('.')[1]||'').length>(codecVersion===1?2:4)||codecVersion===1&&value>10)return{...reject,attempted:true};
+      if(value!==1)owner.mapSize=units/MAP_SIZE_UNITS;if(metadata[1])owner.kind='spacer';mayPresent=false;continue;
+    }
+    if (!owner || !mayDescribe || line !== prefix + '[desc]') return extended?{...reject,attempted:true}:reject;
+    mayPresent=false;
     const body = []; let closed = false;
     while (++i < lines.length) {
       if (!lines[i].startsWith(prefix)) return reject;
@@ -278,7 +486,8 @@ function decodeDescriptionOutline(text) {
     if (!closed || !body.length) return reject;
     owner.text += '\n' + body.join('\n'); mayDescribe = false; recognized = true;
   }
-  return recognized ? { recognized: true, items } : reject;
+  if(extended){const pending=items.slice();if(!pending.length)return{...reject,attempted:true};while(pending.length){const n=pending.pop();if(!validPresentation(n))return{...reject,attempted:true};pending.push(...n.children);}}
+  return recognized ? { recognized: true, items, extended } : reject;
 }
 
 function splitNodeText(text) {
@@ -293,6 +502,7 @@ const ipadSafari = navigator.maxTouchPoints > 1 &&
   (/iPad/i.test(navigator.userAgent) || navigator.platform === 'MacIntel' && /Macintosh/i.test(navigator.userAgent)) &&
   /AppleWebKit/i.test(navigator.userAgent) && /Version\//i.test(navigator.userAgent) && /Safari\//i.test(navigator.userAgent) &&
   !/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium|Android|Edg\/|OPR\//i.test(navigator.userAgent);
+const numericSelection=bindNumericInputs(container);
 const integratedHeader = !!(opts.paneControls && opts.headerContent instanceof Element);
 let headerSlot = null;
 // R12-4B: optional opaque host edges share the existing private chronology.
@@ -325,7 +535,7 @@ const timers = new Set(), frames = new Set(), listeners = new WeakMap(), globalL
 const hadHostClass = container.classList.contains('moa-outliner');
 container.classList.add('moa-outliner');
 if (ipadSafari) container.classList.add('ipad-safari');
-const style = document.createElement('style'); style.textContent = css + descriptionCSS + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
+const style = document.createElement('style'); style.textContent = presentationCSS + css + descriptionCSS + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
 const fragment = document.createElement('template'); fragment.innerHTML = originalHeader + template;
 const ownedNodes = [...fragment.content.childNodes];
 container.append(style, fragment.content);
@@ -364,14 +574,14 @@ listen(container, 'compositionstart', () => { historyComposing = true; }, true);
 listen(container, 'compositionend', () => { historyComposing = false; }, true);
 function ownsEvent(e, historyShortcut = false) {
   if (!visibleHost()) return false;
-  if (headerSlot?.contains(e.target)) return false;
+  if (headerSlot?.contains(e.target) || e.target?.closest?.('#ol-menu input')) return false;
   if (container.contains(e.target)) return true;
   const a = document.activeElement, neutral = n => n === document.body || n === document.documentElement || n === null;
   return lastOwnedInteraction && (sel.size > 0 || (historyShortcut && historyShortcutOwned)) && neutral(e.target) && neutral(a) && !e.target?.isContentEditable;
 }
 function destroy() {
   if (destroyed) return;
-  cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
+  endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
   frames.forEach(id => window.cancelAnimationFrame(id)); frames.clear();
@@ -395,7 +605,7 @@ function destroy() {
 }
 
 // Integration API only. Original persistence/history and editing decisions remain below.
-const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus'].map(event => [event, new Set()]));
+const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus', 'search'].map(event => [event, new Set()]));
 let publicationReady = false, publicationQueued = false, changeTimer = null, revision = 0;
 let immediateSnapshot, observedTree, publishedTree;
 const transientToggles = new Map();
@@ -405,14 +615,14 @@ function getSnapshot() {
     const { nodes, into } = stack.pop();
     for (const n of nodes) {
       if (n === phNode && phOwner && phOwner.children.length === 1 && phOwner.children[0] === n && !n.text && !n.children.length) continue;
-      const copy = { id: n.id, text: n.text, open: n.open, children: [] };
+      const copy = copyPresentation(n, { id: n.id, text: n.text, open: n.open, children: [] });
       into.push(copy); stack.push({ nodes: n.children, into: copy.children });
     }
   }
   return { zoomId: zoom === root ? null : zoom.id, tree };
 }
 function on(event, fn) {
-  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom, paneAction or pinFocus and a callback');
+  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom, paneAction, pinFocus or search and a callback');
   if (destroyed) return () => {};
   subscribers.get(event).add(fn);
   return () => subscribers.get(event).delete(fn);
@@ -420,7 +630,7 @@ function on(event, fn) {
 function emit(event, payload) {
   for (const fn of [...subscribers.get(event)]) {
     if (destroyed) break;
-    try { fn(event === 'toggle' ? { changes: payload.changes.map(c => ({ ...c })), transient: payload.transient } : { ...payload }); } catch (error) { /* A subscriber cannot interrupt editing or other subscribers. */ }
+    try { if(event==='search'){const result=fn({...payload});if(result&&typeof result.then==='function')Promise.resolve(result).catch(()=>{});continue;} fn(event === 'toggle' ? { changes: payload.changes.map(c => ({ ...c })), transient: payload.transient } : { ...payload }); } catch (error) { /* A subscriber cannot interrupt editing or other subscribers. */ }
   }
 }
 let paneMode = 'split';
@@ -541,7 +751,7 @@ let uid = 0;
 const mk = (t = '') => ({ id: ++uid, text: t, children: [], open: true });
 const KEY = 'outliner-v1';
 let root, zoom, par = new Map();
-let saveBlocked = false, blockedTree = null;
+let saveBlocked = false, blockedTree = null, loadedPresentationSnapshot = null;
 
 function updateUidFromTree(n) { uid = Math.max(uid, n.id); n.children.forEach(updateUidFromTree); return n; }
 function load() {
@@ -555,10 +765,12 @@ function load() {
       while (stack.length) {
         const n = stack.pop();
         if (!n || !Number.isSafeInteger(n.id) || ids.has(n.id) || typeof n.text !== 'string' || typeof n.open !== 'boolean' || !Array.isArray(n.children)) throw new Error('Invalid outline');
-        ids.add(n.id); for (const child of n.children) stack.push(child);
+        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined))throw new Error('Invalid outline presentation');
+        if(n.mapSize!==undefined)n.mapSize=mapSizeUnits(n.mapSize)/MAP_SIZE_UNITS;if(n.mapSize===1)delete n.mapSize;ids.add(n.id); for (const child of n.children) stack.push(child);
       }
       root = updateUidFromTree(d.root);
       zoom = find(root, d.zoom) || root;
+      loadedPresentationSnapshot=snap();
       return;
     }
   } catch (e) {
@@ -588,8 +800,28 @@ function appendHistory(entry) {
   }
   hi = hist.length - 1;
 }
-let typingSnapshot = null;
+let typingSnapshot = null,adjustment=null,adjustmentSaveTimer=null;
+function endAdjustment(token){if(token&&adjustment?.token!==token)return;adjustment=null;clearTimeout(adjustmentSaveTimer);adjustmentSaveTimer=null;flushSave();}
+function beginAdjustment(kind){
+  endAdjustment();if(historyComposing||destroyed)return null;
+  if(historyHost&&!historyCallback('beforeCommand','adjustment'))return null;
+  if(tm)record(snap(),true);else record();
+  const token={};adjustment={token,kind,index:hi,edge:null,writing:false};return token;
+}
+function beginHostAdjustment(){return beginAdjustment('host');}
+function endHostAdjustment(token){endAdjustment(token);}
+function appendAdjustment(entry,kind){
+  const a=adjustment;if(!a||a.kind!==kind||!a.writing)return false;
+  if(a.edge&&hi===a.index&&hist[hi]===a.edge){
+    if(kind==='host')entry={...entry,before:a.edge.before};
+    else if(a.edge.focus)entry=typeof entry==='string'?{outline:entry,focus:a.edge.focus}:{...entry,focus:a.edge.focus};
+    hist[hi]=entry;a.edge=entry;return true;
+  }
+  if(hi!==a.index){endAdjustment();return false;}
+  appendHistory(entry);a.index=hi;a.edge=entry;return true;
+}
 function record(x = snap(), settleTyping = false) {
+  if(adjustment&&!adjustment.writing)endAdjustment();
   const pending = tm && typingSnapshot; clearTimeout(tm); tm = null; typingSnapshot = null;
   // Owner V1.1 exception: a changed zoom is an outline history step, even with identical text.
   if (historyHost) {
@@ -607,9 +839,9 @@ function record(x = snap(), settleTyping = false) {
         }
       } catch (_) { toast('History action could not complete'); }
     }
-    appendHistory(focus ? {outline:x,focus} : x); return;
+    const entry=focus ? {outline:x,focus} : x;if(!appendAdjustment(entry,'outline'))appendHistory(entry); return;
   }
-  if (x === hist[hi]) return; hist.length = hi + 1; hist.push(x); if (hist.length > 300) hist.shift(); hi = hist.length - 1;
+  if (x === hist[hi]) return; if(appendAdjustment(x,'outline'))return; hist.length = hi + 1; hist.push(x); if (hist.length > 300) hist.shift(); hi = hist.length - 1;
 }
 function detachedHostValue(value) {
   const text = JSON.stringify(value);
@@ -620,6 +852,10 @@ function detachedHostValue(value) {
 }
 function commitHostHistory(edge) {
   if (!historyHost || destroyed || !container.isConnected || historyBusy || historyComposing || historyPreparing && historyPreparedCommit) return false;
+  // A finished hold cannot append a new edge after Undo or another command.
+  if(edge.adjustmentToken&&edge.adjustmentToken!==adjustment?.token)return false;
+  if(adjustment&&edge.adjustmentToken!==adjustment.token)endAdjustment();
+  if(adjustment)adjustment.writing=true;
   historyBusy = true;
   try {
     // Pending typing is a new change, even while this command is guarded against reentry.
@@ -633,12 +869,13 @@ function commitHostHistory(edge) {
     } catch (_) { return false; }
     if (!edge.force && JSON.stringify(before) === JSON.stringify(after)) return false;
     if (!historyCallback('apply', detachedHostValue(after)) || destroyed) return false;
-    appendHistory({ before, after });
+    if(!appendAdjustment({before,after},'host'))appendHistory({ before, after });
     if (historyPreparing) historyPreparedCommit = true;
     return true;
-  } finally { historyBusy = false; }
+  } finally { historyBusy = false; if(adjustment)adjustment.writing=false; }
 }
 function runHistory(direction) {
+  endAdjustment();
   if (!historyHost || destroyed || !container.isConnected || historyBusy || historyPreparing || historyComposing || !['undo', 'redo'].includes(direction)) return false;
   historyPreparing = true; historyPreparedCommit = false;
   let ready;
@@ -665,6 +902,7 @@ function reportSaveFailure() {
 function flushSave() {
   try {
     const value = snap();
+    if(loadedPresentationSnapshot!==null){if(value===loadedPresentationSnapshot)return;loadedPresentationSnapshot=null;}
     if (saveBlocked) {
       if (JSON.stringify(JSON.parse(value).root) === blockedTree) return;
       saveBlocked = false;
@@ -675,7 +913,7 @@ function flushSave() {
   }
 }
 function save(typing) {
-  flushSave();
+  if(adjustment?.writing){if(!adjustmentSaveTimer)adjustmentSaveTimer=setTimeout(()=>{adjustmentSaveTimer=null;flushSave();},50);}else flushSave();
   if (typing) { typingSnapshot = snap(); clearTimeout(tm); tm = setTimeout(record, 500); } else record();
   schedulePublication();
 }
@@ -689,9 +927,10 @@ function restore(i) {
   sKeep.clear(); keepIds.forEach(id => { const n = find(root, id); if (n) sKeep.add(n); });
   sOver.clear(); overIds.forEach(([id, v]) => { const n = find(root, id); if (n) sOver.set(n, v); });
   const a = viewOnly || ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement(); render(a && a.dataset && a.dataset.id ? +a.dataset.id : null);
+  reconcilePresentationMenu();
 }
-function undo() { if (tm) record(); if (hi > 0) restore(--hi); }
-function redo() { if (tm) record(); if (hi < hist.length - 1) restore(++hi); }
+function undo() { endAdjustment(); if (tm) record(); if (hi > 0) restore(--hi); }
+function redo() { endAdjustment(); if (tm) record(); if (hi < hist.length - 1) restore(++hi); }
 
 // Parser for the seed text and for pasted text (pre-existing behaviour): indented lines, optional bullet markers, also WorkFlowy exports. Multi-line paste rebuilds the tree.
 function parseOutline(text) {
@@ -742,7 +981,8 @@ const esc = x => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&
 const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
 // Height is measured before the web font loads, so it is re-measured once fonts are ready (see the end of the script).
 // scrollTop is reset because a leftover internal scroll offset shifts the caret upward and clips it on an empty bullet.
-const fit = t => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; t.scrollTop = 0; };
+const setEditorHeight = (t,height) => { t.style.height=height; if(t.dataset.role==='title')t.parentElement.style.setProperty('--map-size-title-height',height); };
+const fit = t => { t.style.height = 'auto'; setEditorHeight(t,t.scrollHeight + 'px'); t.scrollTop = 0; };
 
 // Size level of the first row (depth 0) of the current view (level 0 is the biggest), chosen by the text style (mode, see requirement 8).
 // top = the smallest level depth 0 may use: 0 at Home, 1 when zoomed because the title already is level 0.
@@ -784,6 +1024,8 @@ function refreshNodeEditor(binding) {
   const { host, title, getNode, head } = binding, n = getNode(), parts = splitNodeText(n.text);
   if (title.value !== parts.title) title.value = parts.title;
   host.classList.toggle('has-description', parts.hasDescription);
+  host.classList.toggle('spacer-editor',n.kind==='spacer');title.placeholder=n.kind==='spacer'?'Spacer':head?'Untitled':'';
+  updateBadge(host,n);
   if (parts.hasDescription && !binding.description) {
     const field = el('div', 'description-field'), t = el('textarea'); setLevel(field, PLAIN);
     t.rows = 1; t.spellcheck = false; t.dataset.role = 'description'; t.dataset.id = n.id;
@@ -802,6 +1044,11 @@ function refreshNodeEditor(binding) {
     fit(t);
   }
 }
+function updateBadge(host,n){
+  let badge=host.querySelector(':scope > .map-size-badge');if(!badge){badge=el('span','map-size-badge');badge.setAttribute('aria-hidden','true');host.appendChild(badge);}
+  host.classList.toggle('map-size-active',(n.mapSize??1)!==1);
+  badge.textContent='×'+displayMapSize(n.mapSize??1).replace(/\.?0+$/,'');badge.hidden=(n.mapSize??1)===1;
+}
 function focusEditor(binding, pos) {
   const n = binding.getNode(), p = pos == null ? n.text.length : Math.max(0, Math.min(pos, n.text.length)), parts = splitNodeText(n.text);
   const desc = parts.hasDescription && p > parts.title.length, t = desc ? binding.description : binding.title, local = desc ? p - parts.title.length - 1 : p;
@@ -813,7 +1060,8 @@ function bindField(binding, t) {
   const writeField = () => {
     const n = binding.getNode(), parts = { title: binding.title.value, description: binding.description ? binding.description.value : '', hasDescription: !!binding.description };
     if (t.dataset.role === 'description') parts.description = t.value; else parts.title = t.value;
-    n.text = joinNodeText(parts); if (searching() && !binding.head) sKeep.add(n);
+    if(n.kind==='spacer'&&(composing||historyComposing))return n;
+    n.text = joinNodeText(parts); if(!composing&&!historyComposing&&n.text!=='')clearSpacerKind(n); if (searching() && !binding.head) sKeep.add(n);
     return n;
   };
   listen(t, 'compositionstart', () => { composing = true; soft = false; });
@@ -868,6 +1116,7 @@ function bindField(binding, t) {
     if (composing || e.isComposing || e.keyCode === 229 || historyComposing) { soft = false; return; }
     soft = (e.key === 'Enter' || e.keyCode === 13) && e.shiftKey && !e.ctrlKey && !e.metaKey;
     const n = binding.getNode(), range = readEditorRange(n, t), parts = splitNodeText(n.text), collapsed = range.start === range.end;
+    if(!binding.head&&e.key==='Enter'&&e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey){e.preventDefault();e.stopPropagation();presentationCommand('spacer',n);return;}
     if (soft) return; // native insertion, then split only the local editor on input
     if ((e.key === 'Enter' || e.keyCode === 13) && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (enterIntent(n, range, binding.head).kind === 'newline') { soft = true; return; }
@@ -1016,7 +1265,7 @@ function row(n, inSel, d) {
 const rm = n => { const p = par.get(n); p.children.splice(p.children.indexOf(n), 1); };
 function indent(n) {
   const p = par.get(n), i = p.children.indexOf(n); if (!i) return false;
-  const prev = p.children[i - 1]; p.children.splice(i, 1); prev.children.push(n); prev.open = true; return true;
+  const prev = p.children[i - 1]; p.children.splice(i, 1); clearSpacerKind(prev); prev.children.push(n); prev.open = true; return true;
 }
 function outdent(n) {
   const p = par.get(n); if (!p || p === zoom) return false;
@@ -1041,8 +1290,16 @@ function enterIntent(n, t, head = false) {
   const text = t.value.slice(0, start) + t.value.slice(end);
   if (t.role === 'description') return { kind: start < text.length ? 'newline' : head ? 'navigate' : 'insert', text, start };
   if (head) return { kind: 'navigate', text, start };
+  // Explicit spacers insert below; ordinary empty rows keep their existing rules.
+  if (n.kind === 'spacer') return { kind: 'insert', text, start };
   if (!text && !n.children.length && par.get(n) !== zoom) return { kind: 'outdent', text, start };
   return { kind: start === 0 || start < parts.title.length - (end - start) ? 'split' : 'insert', text, start };
+}
+function insertAfterNodeEnd(n,newNode){
+  const parent=par.get(n);if(n===root||!parent)return false;
+  if(isOpen(n)&&n.children.length)n.children.unshift(newNode);
+  else parent.children.splice(parent.children.indexOf(n)+1,0,newNode);
+  return true;
 }
 function enter(n, t) {
   const p = par.get(n), intent = enterIntent(n, t), parts = splitNodeText(intent.text);
@@ -1060,8 +1317,7 @@ function enter(n, t) {
   }
   n.text = intent.text; const nn = mk();
   if (searching()) { sKeep.add(n); sKeep.add(nn); }
-  if (isOpen(n) && n.children.length) n.children.unshift(nn);
-  else p.children.splice(p.children.indexOf(n) + 1, 0, nn);
+  insertAfterNodeEnd(n,nn);
   render(nn.id, 0);
 }
 
@@ -1116,6 +1372,7 @@ function aimDrop(e) {
 }
 function dropTo(items, t) {
   items.forEach(rm);
+  clearSpacerKind(t.parent);
   if (t.open) t.parent.open = true;
   const k = t.parent.children, i = t.before ? k.indexOf(t.before) : k.length;
   k.splice(i < 0 ? k.length : i, 0, ...items); render(null);
@@ -1128,7 +1385,93 @@ function delItems(items) {
   const l = vis(), f = l[Math.max(0, Math.min(idx - 1, l.length - 1))]; if (f) focusNode(f.id);
 }
 // Bullet menu. Wording is a requirement: Expand All / Collapse All act on this bullet's subtree, Export Visible, Export, Delete.
-const menu = container.querySelector('#ol-menu');
+const menu = container.querySelector('#ol-menu'),numericBindings=[];
+const sizeInput=container.querySelector('#ol-map-size'),sizeScope=container.querySelector('#ol-size-subtree');
+let sizeComposing=false,sizeBlurPending=false,sizeDirty=false,sizeInclude=false,sizeSession=null;
+function promotePresentation(n){if(n===phNode){phNode=phOwner=null;}}
+function syncPresentationMenu(){
+  if(!menuNode)return;const value=menuNode.mapSize??1;if(!sizeDirty&&!sizeComposing)sizeInput.value=displayMapSize(value);
+  container.querySelector('#ol-size-down').disabled=value<=MIN_MAP_SIZE;container.querySelector('#ol-size-up').disabled=value>=MAX_MAP_SIZE;
+  menu.querySelector('[data-a="removeSpacer"]').hidden=menuNode.kind!=='spacer';
+  menu.querySelector('[data-a="spacer"]').textContent=canMarkSpacer(menuNode)?'Mark as Spacer':'Insert Spacer Below';
+}
+// History replaces node objects. Rebind only menu state; never replay a stale numeric draft.
+function reconcilePresentationMenu(){
+  if(!menuNode)return;
+  numericBindings.forEach(binding=>binding.finish());
+  const restored=find(root,menuNode.id);
+  menuNode=restored&&par.has(restored)?restored:null;
+  menuT=menuT.map(node=>find(root,node.id)).filter(node=>node&&par.has(node));
+  sizeDirty=false;sizeBlurPending=false;
+  if(!menuNode){menuT=[];menu.classList.remove('show');return;}
+  syncPresentationMenu();syncMenuActions();
+}
+function captureSizeBaseline(n,include){
+  const entries=[],stack=[n];while(stack.length){const node=stack.pop();entries.push({node,parent:par.get(node),value:node.mapSize??1});if(include)for(let i=node.children.length-1;i>=0;i--)stack.push(node.children[i]);}return entries;
+}
+function presentationCommand(action,n=menuNode,value,reset=false){
+  if(!n||n===root||!par.has(n)||historyComposing||sizeComposing||destroyed)return false;
+  if(action==='size'){
+    if(!Number.isFinite(value))return false;value=normalizeMapSize(value);
+    const session=sizeSession;
+    if(session&&(document.hidden||!document.hasFocus()||adjustment?.token!==session.token||session.node!==n||menuNode!==n||!menu.classList.contains('show')))return false;
+    const entries=session?session.entries:captureSizeBaseline(n,sizeInclude),p0=entries[0].value;
+    const clearSubtree=reset&&sizeInclude&&p0===1;
+    if(!session&&!clearSubtree&&value===(n.mapSize??1))return false;
+    const factor=value/p0,changes=[];
+    for(const entry of entries){
+      const {node,parent}=entry;if(!parent||par.get(node)!==parent||mapSizeUnits(entry.value)===null)return false;
+      const next=clearSubtree?1:node===n?value:normalizeMapSize(entry.value*factor);
+      if(next!==(node.mapSize??1))changes.push({node,value:next});
+    }
+    if(!changes.length)return false;
+    if(!session){endAdjustment();if(historyHost&&!historyCallback('beforeCommand','presentation'))return false;record();}
+    if(session)adjustment.writing=true;
+    for(const change of changes){
+      const node=change.node;promotePresentation(node);if(change.value===1)delete node.mapSize;else node.mapSize=change.value;
+      const binding=els.get(node)?.querySelector('.tw')?._nodeEditor;if(binding)updateBadge(binding.host,node);if(zoom===node&&headBinding)updateBadge(headBinding.host,node);
+    }
+    save();if(session&&adjustment?.token===session.token)adjustment.writing=false;syncPresentationMenu();return true;
+  }
+  if(action!=='spacer'&&action!=='removeSpacer')return false;
+  if(action==='removeSpacer'&&n.kind!=='spacer')return false;
+  endAdjustment();if(historyHost&&!historyCallback('beforeCommand','presentation'))return false;record();
+  if(action==='removeSpacer'){
+    clearSpacerKind(n);
+    if(searching())sKeep.add(n);
+  }else{
+    let spacer=n;
+    if(canMarkSpacer(n)){promotePresentation(n);n.text='';}
+    else{spacer=mk();insertAfterNodeEnd(n,spacer);}
+    spacer.kind='spacer';if(searching())sKeep.add(spacer);
+  }
+  menu.classList.remove('show');render();return true;
+}
+function commitSize(){
+  if(sizeComposing||historyComposing)return false;
+  if(!sizeDirty){syncPresentationMenu();return true;}
+  const text=sizeInput.value.trim(),value=parseMapSizeDraft(text),invalid=!!text||sizeInput.validity.badInput;
+  sizeDirty=false;
+  if(value===null){if(invalid)toast('Enter a number with up to 2 decimal places');syncPresentationMenu();return true;}
+  presentationCommand('size',menuNode,value);syncPresentationMenu();return true;
+}
+function sizeActionBoundary(e){
+  const control=e.target.closest('#ol-size-down,#ol-size-up,#ol-size-reset,#ol-size-subtree,.size-scope,#ol-map-size');if(!control)return;
+  if(sizeComposing||historyComposing||e.isComposing||e.keyCode===229){if(!sizeInput.contains(e.target)){e.preventDefault();e.stopImmediatePropagation();}return;}
+  numericBindings.forEach(b=>b.finish());
+  if(e.target!==sizeInput)commitSize();
+}
+listen(menu,'pointerdown',sizeActionBoundary,true);
+listen(menu,'keydown',e=>{if(!e.repeat)sizeActionBoundary(e);},true);
+listen(menu,'click',e=>{if((sizeComposing||historyComposing)&&e.target.closest('#ol-size-down,#ol-size-up,#ol-size-reset,.size-scope')){e.preventDefault();e.stopImmediatePropagation();}},true);
+listen(sizeInput,'input',()=>{sizeDirty=true;});
+listen(sizeInput,'compositionstart',()=>{sizeComposing=true;numericBindings.forEach(b=>b.finish());});
+listen(sizeInput,'compositionend',()=>{sizeComposing=false;if(sizeBlurPending){sizeBlurPending=false;commitSize();}});
+listen(sizeInput,'change',()=>commitSize());listen(sizeInput,'blur',()=>{if(sizeComposing)sizeBlurPending=true;else commitSize();});
+listen(sizeInput,'keydown',e=>{if(e.key==='Enter'&&!e.isComposing&&e.keyCode!==229){e.preventDefault();commitSize();}});
+listen(sizeScope,'change',()=>{if(sizeComposing||historyComposing){sizeScope.checked=sizeInclude;return;}numericBindings.forEach(b=>b.finish());commitSize();sizeInclude=sizeScope.checked;});
+listen(container.querySelector('#ol-size-reset'),'click',()=>{numericBindings.forEach(b=>b.finish());if(commitSize())presentationCommand('size',menuNode,1,true);});
+for(const [id,direction]of [['ol-size-down',-1],['ol-size-up',1]])numericBindings.push(createNumericStepper({button:container.querySelector('#'+id),direction,scale:true,valueAt:mapSizeAt,read:()=>menuNode?.mapSize??1,bounds:()=>({min:MIN_MAP_SIZE,max:MAX_MAP_SIZE}),allowed:()=>(!sizeSession||adjustment?.token===sizeSession.token)&&!sizeComposing&&!historyComposing&&menu.classList.contains('show')&&!!menuNode&&par.has(menuNode),step:()=>{if(commitSize())presentationCommand('size',menuNode,normalizeMapSize((menuNode.mapSize??1)*Math.pow(1.1,direction)));},write:value=>presentationCommand('size',menuNode,value),start:()=>{if(!commitSize())return false;const token=beginAdjustment('outline');if(!token)return false;sizeSession={node:menuNode,include:sizeInclude,entries:captureSizeBaseline(menuNode,sizeInclude),token};return true;},finish:()=>{const session=sizeSession;sizeSession=null;if(session)endAdjustment(session.token);}}));
 let pinnedFocusId = null, menuNode = null;
 function setPinnedFocus(nodeId) {
   if (nodeId !== null && !Number.isInteger(nodeId)) throw new TypeError('Expected a pinned node ID or null');
@@ -1136,8 +1479,8 @@ function setPinnedFocus(nodeId) {
   pinnedFocusId = nodeId;
   menu.querySelector('[data-a="pinFocus"]').textContent = menuNode?.id === pinnedFocusId ? 'Unpin Focus' : 'Pin Focus';
 }
-function openMenu(n, b) {
-  menuNode = n; menuT = sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
+function syncMenuActions(){
+  const n=menuNode;
   const placeholder = !subscribers.get('pinFocus').size || n === phNode && phOwner && phOwner.children.length === 1 && !n.text && !n.children.length;
   menu.querySelector('[data-a="pinFocus"]').hidden = placeholder;
   menu.querySelector('[data-group="pin"]').hidden = placeholder; setPinnedFocus(pinnedFocusId);
@@ -1148,11 +1491,15 @@ function openMenu(n, b) {
   menu.querySelector('[data-a="exportVis"]').hidden = !hasChildren;
   menu.querySelector('[data-group="branches"]').hidden = !hasGrandchildren;
   menu.querySelector('[data-group="export"]').hidden = !hasChildren;
+}
+function openMenu(n, b) {
+  numericBindings.forEach(b=>b.finish());commitSize();menuNode = n;sizeDirty=false;sizeInclude=false;sizeScope.checked=false;syncPresentationMenu(); menuT = sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
+  syncMenuActions();
   topMenu.classList.remove('show'); positionMenu(menu, r);
 }
 const setOpen = (n, o) => { if (n.children.length) setNodeOpen(n, o); n.children.forEach(c => setOpen(c, o)); };
 menu.onclick = e => {
-  const a = e.target.dataset.a; if (!a) return; menu.classList.remove('show');
+  const a = e.target.dataset.a; if (!a) return;numericBindings.forEach(b=>b.finish());if(a==='spacer'||a==='removeSpacer'){presentationCommand(a);return;} menu.classList.remove('show');
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
   else if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
 };
@@ -1178,7 +1525,7 @@ function keys(e, n, t) {
     const list = vis(), i = list.indexOf(n), prev = list[i - 1];
     if (!n.children.length && prev) {
       e.preventDefault();
-      const at = prev.text.length; prev.text += n.text; if (searching()) sKeep.add(prev); rm(n); render(prev.id, at);
+      const at = prev.text.length; prev.text += n.text;if(prev.text!=='')clearSpacerKind(prev); if (searching()) sKeep.add(prev); rm(n); render(prev.id, at);
     } else if (!n.children.length && !prev && p.children.length > 1) {
       e.preventDefault(); const nx = p.children[1]; rm(n); render(nx.id, 0);
     }
@@ -1217,7 +1564,7 @@ function parseHtml(h) {
 function insertItems(items, target, replaceEmpty) {
   const p = par.get(target); let last;
   if (replaceEmpty && !target.text.trim() && !target.children.length) {
-    target.text = items[0].text; target.children = items[0].children;
+    copyPresentation(items[0],target);target.text = items[0].text; target.children = items[0].children;if(target===phNode)promotePresentation(target);
     p.children.splice(p.children.indexOf(target) + 1, 0, ...items.slice(1));
     last = items.length > 1 ? items[items.length - 1] : target;
   } else { p.children.splice(p.children.indexOf(target) + 1, 0, ...items); last = items[items.length - 1]; }
@@ -1230,8 +1577,8 @@ listen(document, 'paste', e => {
   const text = e.clipboardData.getData('text/plain'), html = e.clipboardData.getData('text/html');
   if (historyComposing) return;
   const decoded = decodeDescriptionOutline(text);
-  const instantiate = item => { const n = mk(item.text); n.children = item.children.map(instantiate); return n; };
-  let items = decoded.recognized ? decoded.items.map(instantiate) : /<li[\s>]/i.test(html) ? parseHtml(html) : [];
+  const instantiate = item => { const n = copyPresentation(item,mk(item.text)); n.children = item.children.map(instantiate); return n; };
+  let items = decoded.recognized ? decoded.items.map(instantiate) : !decoded.attempted&&/<li[\s>]/i.test(html) ? parseHtml(html) : [];
   if (!items.length) items = parseOutline(text);
   if (!items.length) return;
   // The event target is the focused bullet even inside sandboxed frames where document.activeElement can be stale.
@@ -1250,9 +1597,11 @@ listen(document, 'paste', e => {
 // depth 0 line and its children are indented under it (Node D, then E F G under it). At Home there is no header line, only the top-level bullets.
 // Plain text export: 2-space indent, "- " prefix. With visible = true, children of collapsed bullets are left out.
 function toText(list, visible) {
-  const out = [];
-  (function w(l, d) { for (const n of l) { if (n === phNode && !n.text) continue; out.push(encodeNodeText(n.text, d)); w(visible ? shownKids(n) : n.children, d + 1); } })(list || (zoom !== root ? [zoom] : visible ? shownKids(zoom) : zoom.children), 0);
-  return out.join('\n');
+  const out = [];let extended=false,codecVersion=1;
+  (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;const encoded=encodeNodeText(n.text,d).split('\n');
+    if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(units>100000||units%100)codecVersion=2;encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+']');}
+    out.push(encoded.join('\n'));w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
+  return extended?'[moa v='+codecVersion+']\n'+out.join('\n')+'\n[/moa]':out.join('\n');
 }
 const toastEl = container.querySelector('#ol-toast'); let toastT;
 function toast(m) { if (destroyed) return; toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 1400); }
@@ -1340,6 +1689,9 @@ listen(document, 'keydown', e => {
     return;
   }
   if (!ownsEvent(e, historyShortcut)) return;
+  if(e.key==='Enter'&&e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229&&!historyComposing){
+    const native=historyEditable(e.target)||historyEditable(document.activeElement);if(!native&&sel.size===1){const n=[...sel][0];if(par.has(n)){e.preventDefault();presentationCommand('spacer',n);}}return;
+  }
   if (historyShortcut) {
     e.preventDefault(); (k === 'y' || e.shiftKey) ? redo() : undo();
     // Restore can remove the focused row. Keep only history keys owned; never focus a replacement.
@@ -1457,13 +1809,16 @@ function syncSearchAction() {
 }
 function startSearch(v) {
   v = v.trim(); if (!v) { endSearch(); return; }
+  const changed=sq!==v;
   sq = v; sOver.clear(); sKeep.clear(); sel.clear(); qBox.classList.add('on'); qIn.blur(); syncSearchAction(); render();
+  if(changed)emit('search',{query:sq});
 }
 function endSearch() {
   const was = searching();
   sq = ''; sShown.clear(); sAnc.clear(); sOver.clear(); sKeep.clear(); qIn.value = ''; qBox.classList.remove('on'); syncSearchAction();
-  if (was) { sel.clear(); render(); }
+  if (was) { sel.clear(); render(); emit('search',{query:sq}); }
 }
+function getSearchQuery(){return sq;}
 listen(qIn, 'keydown', e => {
   if (e.isComposing || e.keyCode === 229 || searchComposing) return;
   if (e.key === 'Enter') { e.preventDefault(); startSearch(qIn.value); }
@@ -1499,7 +1854,7 @@ const refit = () => {
     else {
       textareas.forEach(t => { t.style.height = 'auto'; });
       const heights = textareas.map(t => t.scrollHeight);
-      textareas.forEach((t, i) => { t.style.height = heights[i] + 'px'; });
+      textareas.forEach((t, i) => { setEditorHeight(t,heights[i] + 'px'); });
       textareas.forEach(t => { t.scrollTop = 0; });
     }
     refitWidth = width; refitTreeWidth = treeWidth; refitFontDirty = false;
@@ -1629,7 +1984,7 @@ if (!persistRequested) {
   try { const request = navigator.storage?.persist?.(); if (request && typeof request.catch === 'function') request.catch(() => {}); } catch (_) {}
 }
 initializePublication();
-return { on, getSnapshot, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus };
+return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.8.2', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1'], mount };
+window.Outliner = { version: '1.11.2', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

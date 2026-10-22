@@ -1,13 +1,19 @@
-/* MindMap 1.9.1 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.12.0 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
 (function(){
 'use strict';
 const DEFAULT_BRANCH_SCALE=2.5,MIN_BRANCH_SCALE=1,MAX_BRANCH_SCALE=5;
+const MIN_MAP_SIZE=0.1,MAX_MAP_SIZE=1000,MAP_SIZE_UNITS=10000;
+function mapSizeUnits(value){
+  if(typeof value!=='number'||!Number.isFinite(value)||value<MIN_MAP_SIZE||value>MAX_MAP_SIZE)return null;
+  const scaled=value*MAP_SIZE_UNITS,units=Math.round(scaled);
+  return Math.abs(scaled-units)<=1e-7?units:null;
+}
 function mount(container,opts={}){
   if(!(container instanceof Element))throw new TypeError('MindMap.mount requires an Element');
-  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceStats=null,sourceReady=false,rtimer=null,sourceRevision=0;
+  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceStats=null,sourcePresentation=null,presentationChanged=false,lastPresentationRender=0,sourceReady=false,rtimer=null,sourceRevision=0;
   const timers=new Set(),frames=new Set(),listeners=[],objectURLs=new Set();
   const hadClass=container.classList.contains('moa-mindmap'),hadCoveredClass=container.classList.contains('map-covered');
   container.classList.add('moa-mindmap');
@@ -43,9 +49,10 @@ function mount(container,opts={}){
   listen(fontLink,'error',()=>reportError(new Error('Sarabun font stylesheet failed to load. Canvas uses the original fallback font.')));
   listen(fontLink,'load',()=>loadFonts());
   if(ownsFont)document.head.appendChild(fontLink);
-const layoutTransitions=new WeakMap();
+const layoutTransitions=new WeakMap(),canonicalTexts=new WeakMap(),runSources=new WeakMap();
 function createLayoutPreferences(){
 let branchScale=DEFAULT_BRANCH_SCALE;
+let lengthLimitEnabled=false,lengthLimitRatio=1.5;
 let hlimitInf=true,hlimitN=3,d1Max=Infinity,wrapBoundsReady=false;
 let rootEnabled=false,rootCount=3,rootFollowMax=false,visibleRootCount=0,rootOrder='down';
 const rootMaximum=()=>Math.max(1,visibleRootCount-1);
@@ -54,6 +61,11 @@ let levelsEnabled=false,levelsN=1,siblingLimitEnabled=true,siblingLimitN=3,branc
 function hlimitCap(d){return Math.max(1,d-1);}
 function apply(partial){
   if((typeof partial.branchScale==='number'||typeof partial.branchScale==='string'&&partial.branchScale.trim()!=='')&&Number.isFinite(Number(partial.branchScale)))branchScale=clamp(Math.round((Number(partial.branchScale)+Number.EPSILON)*100),MIN_BRANCH_SCALE*100,MAX_BRANCH_SCALE*100)/100;
+  const length=partial.lengthLimit;
+  if(length&&typeof length==='object'){
+    if(typeof length.enabled==='boolean')lengthLimitEnabled=length.enabled;
+    if((typeof length.ratio==='number'||typeof length.ratio==='string'&&length.ratio.trim()!=='')&&Number.isFinite(Number(length.ratio)))lengthLimitRatio=clamp(Math.round((Number(length.ratio)+Number.EPSILON)*100),100,1000)/100;
+  }
   const outer=partial.rootLayout;
   if(outer&&typeof outer==='object'){
     if(typeof outer.enabled==='boolean')rootEnabled=outer.enabled;
@@ -72,8 +84,7 @@ function apply(partial){
   if(siblings&&typeof siblings==='object'){if(typeof siblings.enabled==='boolean')siblingLimitEnabled=siblings.enabled;if('count' in siblings){const next=safeCount(siblings.count,1,branchSiblingMax,siblingLimitN);siblingCountChosen=Number(siblings.count)!==3;siblingLimitN=next;}}
   // Latest owner policy: activating either layout switches the other off.
   // If an API/bootstrap request supplies both true, LEVELS wins deterministically.
-  if(deeper&&deeper.enabled===true)hlimitInf=true;
-  else if(limit&&limit.enabled===true)levelsEnabled=false;
+  // Latest owner override: WRAP and LEVELS persist and act independently.
 }
 function updateBranchBounds(root,sourceReady,sourceStats){
   if(!sourceReady)return;
@@ -101,9 +112,11 @@ function observeBlank(sourceReady,sourceStats){
   updateBranchBounds(null,sourceReady,sourceStats);visibleRootCount=0;
 if(d1Max!==1||sourceReady&&!wrapBoundsReady){d1Max=1;if(hlimitN>1)hlimitN=1;}if(sourceReady)wrapBoundsReady=true;
 }
-function getSettingBounds(){return{branchScale:{min:MIN_BRANCH_SCALE,max:MAX_BRANCH_SCALE,step:0.1,precision:2,default:DEFAULT_BRANCH_SCALE},rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
-function getSettings(){return{branchScale,rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax,order:rootOrder},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
+function getSettingBounds(){return{lengthLimit:{min:1,max:10,step:0.1,precision:2,default:1.5},branchScale:{min:MIN_BRANCH_SCALE,max:MAX_BRANCH_SCALE,step:0.1,precision:2,default:DEFAULT_BRANCH_SCALE},rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
+function getSettings(){return{lengthLimit:{enabled:lengthLimitEnabled,ratio:lengthLimitRatio},branchScale,rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax,order:rootOrder},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
 return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,
+  get lengthLimitEnabled(){return lengthLimitEnabled;},
+  get lengthLimitRatio(){return lengthLimitRatio;},
   get branchScale(){return branchScale;},
   get rootEnabled(){return rootEnabled;},
   get rootOrder(){return rootOrder;},
@@ -161,6 +174,7 @@ function r01(s){return s/0x100000000}
 function clamp(v,lo,hi){return v<lo?lo:v>hi?hi:v}
 
 function assignColors(node,ph,ps,pl,seed){
+  if(node.synthetic){const real=node.children.filter(ch=>ch.kind!=='spacer');if(real.length===1){real[0].col=hsl(220,.10,.17);assignColors(real[0],220,0,0,seed);return;}}
   if(!node.children.length)return;
   const HLO=36,HHI=90,SLO=0.40,SHI=0.65,SMID=0.55,LLO=0.20,LHI=0.40,LMID=0.30;
   if(node.depth===0){
@@ -169,7 +183,7 @@ function assignColors(node,ph,ps,pl,seed){
     const bS=SLO+r01(bd)*(SHI-SLO);bd=lcg(bd);
     const bL=0.20+r01(bd)*0.10;
     let prevH=bH;
-    node.children.forEach(ch=>{
+    node.children.filter(ch=>ch.kind!=='spacer').forEach(ch=>{
       let sd=nhash(seed,ch.label);
       const shift=HLO+r01(sd)*(HHI-HLO);sd=lcg(sd);
       const h=(prevH+shift)%360;prevH=h;sd=lcg(sd);
@@ -187,7 +201,7 @@ function assignColors(node,ph,ps,pl,seed){
     const sv=clamp(ps+sW,SLO,SHI);sd=lcg(sd);
     const lW=(pl<LMID?1:-1)*r01(sd)*0.10;sd=lcg(sd);
     const l=clamp(pl+lW,LLO,LHI);
-    node.children.forEach(ch=>{ch.col=hsl(h,sv,l);assignColors(ch,h,sv,l,seed);});
+    node.children.filter(ch=>ch.kind!=='spacer').forEach(ch=>{ch.col=hsl(h,sv,l);assignColors(ch,h,sv,l,seed);});
   }
 }
 
@@ -214,6 +228,7 @@ function parse(raw){
     if(!lbl)continue;
     while(stk.length>1&&stk[stk.length-1].ind>=sp)stk.pop();
     const p=stk[stk.length-1].node,n={label:lbl,children:[],depth:p.depth+1};
+    canonicalTexts.set(n,{text:lbl,titleStart:0,titleEnd:lbl.length});
     p.children.push(n);stk.push({ind:sp,node:n});
   }
   if(root.children.length===1)return root.children[0];
@@ -239,7 +254,7 @@ const fwt=d=>d<=2?'bold':'normal';
 function mW(lbl,f,w){const s=Math.min(f,C.MAX_SAFE_FONT);_cx.font=`${w} ${s}px ${C.FONT}`;return _cx.measureText(lbl).width*(f/s);}
 const _capFracCache=new Map();
 function capCFrac(fs,fw){
-  const k=Math.round(fs)+'|'+fw;
+  const k=fs+'|'+fw;
   if(_capFracCache.has(k))return _capFracCache.get(k);
   const _s=Math.min(fs,C.MAX_SAFE_FONT);
   _cx.font=`${fw} ${_s}px ${C.FONT}`;
@@ -281,19 +296,22 @@ function wrapDescriptionLine(text,fs){
 }
 function descriptionSize(node,MD){
   // Preserve the original arithmetic at the default scale, including its minimum.
-  return layoutPreferences.branchScale===DEFAULT_BRANCH_SCALE?fsz(node.depth+2,MD):node.fs/(C.RATIO*C.RATIO);
+  return (layoutPreferences.branchScale===DEFAULT_BRANCH_SCALE?fsz(node.depth+2,MD):node.baseFs/(C.RATIO*C.RATIO))*(node.mapSize??1);
 }
 function measureTextBlock(node,MD){
+  if(node.kind==='spacer')return{runs:[],width:node.fs,minX:0,maxX:node.fs,bottom:node.fs*C.LINE_H,extraHeight:0};
   const title=inkMetrics(node.label,node.fs,node.fw),baseline=node.fs*C.BASELINE_FRAC;
   const runs=[{text:node.label,fs:node.fs,fw:node.fw,x:0,baseline,...title,description:false}];
+  const source=canonicalTexts.get(node);if(source&&source.titleEnd>source.titleStart)runSources.set(runs[0],{start:source.titleStart,end:source.titleEnd});
   let width=title.width,bottom=node.fs;
   if(node.description!==undefined){
-    const fs=descriptionSize(node,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n').flatMap(line=>wrapDescriptionLine(line,fs));
-    let previous=null;
+    const offsets=[];let offset=source?.descriptionStart??0;
+    const fs=descriptionSize(node,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n').flatMap(line=>{const wrapped=wrapDescriptionLine(line,fs);for(const text of wrapped){offsets.push(offset);offset+=text.length;}offset++;return wrapped;});
+    let previous=null,index=0;
     for(const text of lines){
       const ink=inkMetrics(text,fs,'normal');
       const y=previous?previous.baseline+Math.max(fs*C.LINE_H,previous.descent+ink.ascent+gap):Math.max(node.fs,baseline+title.descent)+gap+(title.descent>node.fs*0.02?title.descent*0.5:0)+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
-      const run={text,fs,fw:'normal',x:(title.width-ink.width)/2,baseline:y,...ink,description:true};runs.push(run);previous=run;width=Math.max(width,ink.width);
+      const run={text,fs,fw:'normal',x:(title.width-ink.width)/2,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
     }
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
   }
@@ -305,15 +323,22 @@ function attachNodeTexts(root,texts){
   let index=0;
   const walk=n=>{
     if(!n.synthetic){const text=texts[index++],at=text.indexOf('\n'),title=(at<0?text:text.slice(0,at)).trim();n.label=title||'(Untitled)';n.placeholder=!title;
+      const rawTitle=at<0?text:text.slice(0,at),titleStart=rawTitle.length-rawTitle.trimStart().length;canonicalTexts.set(n,{text,titleStart,titleEnd:titleStart+title.length,...(at>=0?{descriptionStart:at+1}:{})});
       if(at>=0)n.description=text.slice(at+1);}
     n.children.forEach(walk);
   };walk(root);
 }
-const nodeWidth=n=>n.textBlock?n.textBlock.width:mW(n.label,n.fs,n.fw);
+function attachPresentation(root,values){
+  if(!values)return;let index=0;const walk=n=>{if(!n.synthetic){const p=values[index++];n.mapSize=p.mapSize;n.kind=p.kind;if(n.kind==='spacer'){n.label='';delete n.description;n.placeholder=false;canonicalTexts.delete(n);}}n.children.forEach(walk);};walk(root);
+  // A new spacer root is an occupied slot, never an extra real font/color level.
+  if(root.synthetic&&root.children.filter(n=>n.kind!=='spacer').length<=1){root.depth=-1;const shift=n=>{n.depth--;n.children.forEach(shift);};root.children.forEach(shift);}
+}
+const titleWidth=n=>n.kind==='spacer'?n.fs:mW(n.label,n.fs,n.fw);
+const nodeWidth=n=>n.textBlock?n.textBlock.width:titleWidth(n);
 
 // Descriptions reserve two visual font levels, never real tree depth/statistics.
 function hasDescription(n){return n.description!==undefined||n.children.some(hasDescription);}
-function visualMaxD(root){let depth=0;const walk=n=>{depth=Math.max(depth,n.depth+(n.description!==undefined?2:0));n.children.forEach(walk);};walk(root);return depth;}
+function visualMaxD(root){let depth=0;const walk=n=>{if(!n.synthetic&&n.kind!=='spacer')depth=Math.max(depth,n.depth+(n.description!==undefined?2:0));n.children.forEach(walk);};walk(root);return depth;}
 function lastLeafFs(n){return n.children.length?lastLeafFs(n.children[n.children.length-1]):n.fs;}
 
 /* ══ ARM / SPINE HELPERS ══ */
@@ -330,7 +355,7 @@ function spineXOf(node){return node.x+spineOffsetOf(node);}
 function assignSubtreeX(node,MD){
   if(node.subtree){for(const offset of node.subtree.childOffsets){offset.node.x=node.x+offset.x;assignSubtreeX(offset.node,MD);}return;}
   const sx=spineXOf(node);
-  node.children.forEach(ch=>{
+  node.children.filter(ch=>ch.kind!=='spacer').forEach(ch=>{
     ch.x=sx+armLen(ch.depth,MD);
     assignSubtreeX(ch,MD);
   });
@@ -351,7 +376,7 @@ function colW(n,MD){
 
 /* ══ ROOT GRID HELPERS ══ */
 function footprintW(node,MD){
-  return Math.max(mW(node.label,node.fs,node.fw),colW(node,MD));
+  return Math.max(titleWidth(node),colW(node,MD));
 }
 function thaiTierBonusFrac(tier){
   switch(tier){case 1:return C.THAI_TIER1_R;case 2:return C.THAI_TIER2_R;case 3:return C.THAI_TIER3_R;default:return 0;}
@@ -382,14 +407,15 @@ function footprintH(node,MD){
   return h;
 }
 function d1ColGap(colA,colB,ARM1){
-  const mxA=colA.length?Math.max(...colA.map(ch=>mW(ch.label,ch.fs,ch.fw))):0;
-  const mxB=colB.length?Math.max(...colB.map(ch=>mW(ch.label,ch.fs,ch.fw))):0;
+  const mxA=colA.length?Math.max(...colA.map(ch=>titleWidth(ch))):0;
+  const mxB=colB.length?Math.max(...colB.map(ch=>titleWidth(ch))):0;
   return Math.max(ARM1*C.D1_ARM_FLOOR_R,(mxA+mxB)*C.D1_TXT_PAD_R);
 }
 function d1RowGap(nextNode){return nextNode.fs*C.D1_ROW_GAP_R+nextNode.fs*thaiTierBonusFrac(nextNode.thaiTier);}
 function firstRowUpwardBonus(nodes,d1Fs){
   if(!nodes.length)return 0;
   const maxTier=Math.max(...nodes.map(n=>n.thaiTier||0));
+  if(nodes.some(n=>(n.mapSize??1)!==1))return Math.max(...nodes.map(n=>n.fs*((n.thaiTier||0)===3?C.THAI_TIER3_FIRSTROW_R:thaiTierBonusFrac(n.thaiTier||0))));
   const frac=maxTier===3?C.THAI_TIER3_FIRSTROW_R:thaiTierBonusFrac(maxTier);
   return d1Fs*frac;
 }
@@ -412,9 +438,9 @@ function place(node,y0){
   return y0+node.fs*C.LINE_H+node.textBlock.extraHeight;
 }
 function annotateNodes(node,MD){
-  node.fs=fsz(node.depth,MD);node.fw=fwt(node.depth);node.capFrac=capCFrac(node.fs,node.fw);
+  node.baseFs=fsz(node.depth,MD);node.fs=node.baseFs*(node.mapSize??1);node.fw=fwt(node.depth);node.capFrac=capCFrac(node.fs,node.fw);
   node.textBlock=measureTextBlock(node,MD);
-  node.thaiTier=thaiHeightTier(node.label);node.hasLower=hasThaiLower(node.label);
+  node.thaiTier=node.kind==='spacer'?0:thaiHeightTier(node.label);node.hasLower=node.kind!=='spacer'&&hasThaiLower(node.label);
   node.children.forEach(ch=>annotateNodes(ch,MD));
 }
 // One bottom-up footprint record per node; placement never remeasures descendants.
@@ -422,7 +448,11 @@ function measureSubtree(node,MD,forceVertical=false){
   if(!forceVertical)node.children.forEach(ch=>measureSubtree(ch,MD));
   let minX=node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
-  const horizontal=!forceVertical&&layoutPreferences.levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].layoutDepth>=2&&children[0].layoutDepth<=layoutPreferences.levelsN+1&&(!layoutPreferences.siblingLimitEnabled||children.length<=layoutPreferences.siblingLimitN);
+  const customSize=(node.mapSize??1)!==1||children.some(ch=>ch.subtree.customSize);
+  const ownTop=Math.min(0,...node.textBlock.runs.map(run=>run.baseline-run.ascent));
+  const ownBottom=Math.max(node.textBlock.bottom,...node.textBlock.runs.map(run=>run.baseline+run.descent));
+  let minY=ownTop;
+  let horizontal=!forceVertical&&layoutPreferences.levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].layoutDepth>=2&&children[0].layoutDepth<=layoutPreferences.levelsN+1&&(!layoutPreferences.siblingLimitEnabled||children.length<=layoutPreferences.siblingLimitN);
   if(children.length){
     if(horizontal){
       let cursor=0;
@@ -431,35 +461,64 @@ function measureSubtree(node,MD,forceVertical=false){
         offsets.push({node:ch,x:cursor-record.minX,y:0});cursor+=record.maxX-record.minX;
         if(i+1<children.length)cursor+=Math.max(armLen(ch.depth,MD),ch.fs*C.SIBLING_GAP_R);
       }
-      const first=offsets[0],last=offsets[offsets.length-1],center=(first.x+mW(first.node.label,first.node.fs,first.node.fw)/2+last.x+mW(last.node.label,last.node.fs,last.node.fw)/2)/2;
-      const childFs=children[0].fs,baseGap=childFs*C.GAP_R*C.D0_D1_GAP_MULT;
-      const y=node.fs+node.textBlock.extraHeight+baseGap+lowerThaiChildBonus(node,baseGap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,childFs);
-      for(const offset of offsets){offset.x+=mW(node.label,node.fs,node.fw)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
-    }else{
+      const first=offsets[0],last=offsets[offsets.length-1],center=(first.x+titleWidth(first.node)/2+last.x+titleWidth(last.node)/2)/2;
+      const childFs=Math.max(...children.map(ch=>ch.fs)),baseGap=childFs*C.GAP_R*C.D0_D1_GAP_MULT;
+      let y=node.fs+node.textBlock.extraHeight+baseGap+lowerThaiChildBonus(node,baseGap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,childFs);
+      if(customSize)y=Math.max(y,ownBottom+Math.max(baseGap,lnW(children[0].depth,MD)*3)-Math.min(...children.map(ch=>ch.subtree.minY)));
+      for(const offset of offsets){offset.x+=titleWidth(node)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
+      // Length limits are opt-in; left overhang alone is not a width limit.
+      // Incoming connector clearance is checked by the vertical parent below.
+      if(layoutPreferences.lengthLimitEnabled){
+        const span=cursor,title=node.textBlock.runs[0],titleWidth=Math.max(title.width,title.right)-Math.min(0,-title.left),threshold=titleWidth*layoutPreferences.lengthLimitRatio;
+        const tolerance=1e-9*Math.max(1,span,threshold);
+        if(!Number.isFinite(span)||!Number.isFinite(threshold)||titleWidth<=0||span>threshold+tolerance){horizontal=false;offsets.length=0;height=node.fs*C.LINE_H+node.textBlock.extraHeight;}
+      }
+    }
+    if(!horizontal){
       const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1,subGap=children[0].fs*C.SUB_GAP_R*sR;
       let y=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
       const spine=spineOffsetOf(node);
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
       // Reserve the incoming vertical shaft corridor, including stroke and measured ink.
+      // A one-column WRAP also gives first-level children this incoming shaft.
       // Forced rebuilds reuse measured children; each node is built at most twice.
       for(let i=0;i<children.length;i++){
         const ch=children[i];if(i)y+=siblingGapDelta(ch,children[i-1].subtree.lastLeafFs);
         // Centered own paragraphs reserve their left ink without changing title anchors within the block.
         const descriptionInset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
-        if(((node.layoutDepth??node.depth)>0||(!node.synthetic&&node.children.length===1))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+armLen(ch.depth,MD)<=lnW(ch.depth,MD)/2)measureSubtree(ch,MD,true);
+        if(((node.layoutDepth??node.depth)>0||(!node.synthetic&&(children.length===1||!layoutPreferences.hlimitInf&&layoutPreferences.hlimitN===1)))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+armLen(ch.depth,MD)<=lnW(ch.depth,MD)/2)measureSubtree(ch,MD,true);
+        // Customized footprints clear actual adjacent ink; default arithmetic is unchanged.
+        if(customSize)y=i===0?Math.max(y,ownBottom+subGap-ch.subtree.minY):y-Math.min(0,ch.subtree.minY);
         offsets.push({node:ch,x:spine+armLen(ch.depth,MD)+descriptionInset,y});y+=ch.subtree.height;
       }
-      height=y;
+      height=Math.max(height,y);
     }
-    for(const offset of offsets){minX=Math.min(minX,offset.x+offset.node.subtree.minX);maxX=Math.max(maxX,offset.x+offset.node.subtree.maxX);}
+    for(const offset of offsets){minY=Math.min(minY,offset.y+offset.node.subtree.minY);minX=Math.min(minX,offset.x+offset.node.subtree.minX);maxX=Math.max(maxX,offset.x+offset.node.subtree.maxX);}
   }
-  node.subtree={minX,maxX,height,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
+  if(customSize){
+    const connected=offsets.filter(offset=>offset.node.kind!=='spacer');
+    if(connected.length){
+      const half=lnW(connected[0].node.depth,MD)/2;
+      if(horizontal){
+        for(const offset of connected){
+          const center=offset.x+titleWidth(offset.node)/2;
+          minX=Math.min(minX,center-half);maxX=Math.max(maxX,center+half);
+        }
+      }else{
+        const spine=spineOffsetOf(node);
+        minX=Math.min(minX,spine-half);
+        maxX=Math.max(maxX,spine+Math.max(...connected.map(offset=>armLen(offset.node.depth,MD)))*.70+half);
+        for(const offset of connected)height=Math.max(height,offset.y+offset.node.fs*offset.node.capFrac+half);
+      }
+    }
+  }
+  node.subtree={minX,maxX,minY,height,customSize,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
 }
 function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
-  const d1Fs=NC?d1[0].fs:C.BASE_FONT;
-  const d1TxtW=d1.map(n=>mW(n.label,n.fs,n.fw));
+  const d1Fs=NC?Math.max(...d1.map(ch=>ch.fs)):C.BASE_FONT;
+  const d1TxtW=d1.map(n=>titleWidth(n));
   const d1ColW_s=d1.map((n,i)=>Math.max(colW(n,MD),d1TxtW[i]));
   const cl=[];let xc=C.LEFT_M;
   for(let i=0;i<NC;i++){
@@ -470,23 +529,24 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
   }
   for(let i=0;i<NC;i++){d1[i].x=cl[i]-(d1[i].subtree?.minX||0);assignSubtreeX(d1[i],MD);}
   for(let i=0;i<NC;i++)d1[i].cx=d1[i].x+d1TxtW[i]/2;
-  const rCX=NC===0?C.LEFT_M+mW(root.label,root.fs,root.fw)/2:
+  const rCX=NC===0?C.LEFT_M+titleWidth(root)/2:
     NC===1?d1[0].cx:(d1[0].cx+d1[NC-1].cx)/2;
-  root.cx=rCX;root.x=rCX-mW(root.label,root.fs,root.fw)/2;
+  root.cx=rCX;root.x=rCX-titleWidth(root)/2;
   if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
   const d1BaseGap=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
-  const d1Y=root.y+root.fs+root.textBlock.extraHeight+d1BaseGap+lowerThaiChildBonus(root,d1BaseGap)*(NC===1?1:C.LOWER_THAI_FANOUT_FRAC);
+  let d1Y=root.y+root.fs+root.textBlock.extraHeight+d1BaseGap+lowerThaiChildBonus(root,d1BaseGap)*(NC===1?1:C.LOWER_THAI_FANOUT_FRAC);
+  if(root.subtree?.customSize&&d1.length)d1Y=Math.max(d1Y,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap-Math.min(...d1.map(ch=>ch.subtree.minY)));
   const firstRowBonus=firstRowUpwardBonus(d1,d1Fs);
   const bots=[];for(let i=0;i<NC;i++)bots.push(place(d1[i],d1Y+firstRowBonus));
   const pW=Math.max(NC?cl[NC-1]+d1ColW_s[NC-1]+d1TxtW[NC-1]*C.D1_TXT_PAD_R:0,
-    root.x+mW(root.label,root.fs,root.fw))+C.RIGHT_M;
+    root.x+titleWidth(root))+C.RIGHT_M;
   const pH=(bots.length?Math.max(...bots):d1Y+120)+C.BOT_M;
   const av=d1Y-root.y-root.fs-root.textBlock.extraHeight;
   const rg=Math.min(cgap(d1[0]?.depth||1,MD),av*0.3);
   const rb=root.y+root.fs+root.textBlock.extraHeight+rg;
   const d1BusY=rb+(d1Y-rb)*C.BUS_MID;
   const sX0=Math.min(root.x,NC?cl[0]:root.x);
-  const sX1=Math.max(root.x+mW(root.label,root.fs,root.fw),
+  const sX1=Math.max(root.x+titleWidth(root),
     NC?cl[NC-1]+d1ColW_s[NC-1]+d1TxtW[NC-1]*C.D1_TXT_PAD_R:root.x);
   return{root,MD,pW,pH,d1Y,d1Mode:'simple',d1Cols:null,d1Groups:null,
     d1ColX:null,d1BusY,d1X0:sX0,d1X1:sX1,firstRowBonus};
@@ -496,7 +556,7 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   root.y=C.TOP_M;
   const cols=Math.min(layoutPreferences.hlimitN,NC);
   const ARM1=armLen(d1[0].depth,MD);
-  const d1Fs=d1[0].fs;
+  const d1Fs=Math.max(...d1.map(ch=>ch.fs));
   const base=Math.floor(NC/cols),extra=NC%cols;
   const colChildren=[];let cidx=0;
   for(let c=0;c<cols;c++){const sz=c<extra?base+1:base;colChildren.push(d1.slice(cidx,cidx+sz));cidx+=sz;}
@@ -510,7 +570,8 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   }
   const gridX1=d1ColX[cols-1]+colWidths[cols-1];
   const d1BaseGap_g=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
-  const d1Y_g=root.y+(cols===1&&root.description!==undefined?describedChildrenOffset(root,d1Fs*C.SUB_GAP_R):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
+  let d1Y_g=root.y+(cols===1&&root.description!==undefined?describedChildrenOffset(root,d1Fs*C.SUB_GAP_R):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
+  if(root.subtree?.customSize)d1Y_g=Math.max(d1Y_g,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap_g-Math.min(...d1.map(ch=>ch.subtree.minY)));
   const av_g=d1Y_g-root.y-root.fs-root.textBlock.extraHeight;
   const rg_g=Math.min(cgap(d1[0]?.depth||1,MD),av_g*0.3);
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
@@ -522,6 +583,7 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   for(let c=0;c<cols;c++){
     let yc=gridStartY+firstRowBonus;colRowY[c]=[];
     for(let r=0;r<colChildren[c].length;r++){
+      if(r>0&&root.subtree?.customSize)yc-=Math.min(0,colChildren[c][r].subtree.minY);
       colRowY[c][r]=yc;yc+=footprintH(colChildren[c][r],MD);
       if(r+1<colChildren[c].length)yc+=d1RowGap(colChildren[c][r+1]);
     }
@@ -531,7 +593,7 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
     for(let r=0;r<colChildren[c].length;r++){
       const ch=colChildren[c][r];
       ch.x=colLabelX[c]-(ch.subtree?.minX||0);assignSubtreeX(ch,MD);place(ch,colRowY[c][r]);
-      ch.cx=ch.x+mW(ch.label,ch.fs,ch.fw)/2;
+      ch.cx=ch.x+titleWidth(ch)/2;
       d1Groups.push({node:ch,col:c,row:r,cellX:d1ColX[c],cellY:colRowY[c][r],
         labelX:colLabelX[c],cellW:colWidths[c],cellH:footprintH(ch,MD)});
     }
@@ -546,10 +608,10 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   const existingCX=gridX0+gridTotalW/2;
   const spineCX=(d1ColX[0]+d1ColX[cols-1])/2;
   const rCX_g=(existingCX+spineCX)/2;
-  root.cx=rCX_g;root.x=rCX_g-mW(root.label,root.fs,root.fw)/2;
+  root.cx=rCX_g;root.x=rCX_g-titleWidth(root)/2;
   if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
   if(cols===1)assignSubtreeX(root,MD);
-  let _gMaxX=root.x+mW(root.label,root.fs,root.fw);
+  let _gMaxX=root.x+titleWidth(root);
   (function _gwk(n){const rx=n.x+(n.description===undefined?nodeWidth(n):n.textBlock.maxX);if(rx>_gMaxX)_gMaxX=rx;n.children.forEach(_gwk);})(root);
   return{root,MD,pW:_gMaxX+C.RIGHT_M,pH:gridY1+C.BOT_M,d1Y:gridStartY,
     d1Mode:'grid',d1Cols:cols,d1Groups,d1ColX,d1BusY,d1X0:gridX0,d1X1:gridX1,firstRowBonus};
@@ -558,7 +620,7 @@ function layoutTree(root,MD,colorSeed,recolor=true){
   const NC=root.children.length;
   // A lone real root child always uses the existing left-side vertical connector.
   if(NC===1&&!root.synthetic)return layoutGrid(root,MD,colorSeed,recolor);
-  return(layoutPreferences.levelsEnabled||layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed,recolor):layoutGrid(root,MD,colorSeed,recolor);
+  return(layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed,recolor):layoutGrid(root,MD,colorSeed,recolor);
 }
 function translateLayout(lay,dx,dy){
   const walk=n=>{n.x+=dx;n.y+=dy;if(n.cx!=null)n.cx+=dx;n.children.forEach(walk);};walk(lay.root);
@@ -571,7 +633,7 @@ function layout(root,colorSeed){
   const roots=root.synthetic?root.children:[root],logical=(n,d)=>{n.layoutDepth=d;n.children.forEach(ch=>logical(ch,d+1));};
   roots.forEach(n=>logical(n,0));
   const MD=visualMaxD(root);annotateNodes(root,MD);
-  const described=hasDescription(root);if(layoutPreferences.levelsEnabled||described)roots.forEach(n=>measureSubtree(n,MD));
+  const described=hasDescription(root),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1);if(layoutPreferences.levelsEnabled||described||presented)roots.forEach(n=>measureSubtree(n,MD));
   if(!root.synthetic)return layoutTree(root,MD,colorSeed);
   // Color once in original whole-map order; outer packing only translates complete trees.
   root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
@@ -618,6 +680,7 @@ function contentBounds(lay){
   const root=lay.root;
   let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   const walk=n=>{
+    if(n.kind==='spacer'){x0=Math.min(x0,n.x);x1=Math.max(x1,n.x+n.fs);y0=Math.min(y0,n.y);y1=Math.max(y1,n.y+n.fs*C.LINE_H);return;}
     const safeFs=Math.min(n.fs,C.MAX_SAFE_FONT);
     const scaleRatio=n.fs/safeFs;
     _cx.font=`${n.fw} ${safeFs}px ${C.FONT}`;_cx.textBaseline='alphabetic';
@@ -625,9 +688,9 @@ function contentBounds(lay){
     const baselineY=n.y+n.fs*C.BASELINE_FRAC;
     const ny0=baselineY-(m.actualBoundingBoxAscent??safeFs*0.80)*scaleRatio;
     const ny1=baselineY+(m.actualBoundingBoxDescent??safeFs*0.20)*scaleRatio;
-    const nx1=n.x+mW(n.label,n.fs,n.fw);
+    const nx1=n.x+titleWidth(n);
     if(!n.synthetic){if(n.x<x0)x0=n.x;if(ny0<y0)y0=ny0;if(nx1>x1)x1=nx1;if(ny1>y1)y1=ny1;}
-    if(!n.synthetic&&(n.description!==undefined||layoutPreferences.levelsEnabled)){
+    if(!n.synthetic&&(n.description!==undefined||layoutPreferences.levelsEnabled||(n.mapSize??1)!==1)){
       for(const run of n.textBlock.runs){
         x0=Math.min(x0,n.x+run.x-run.left);x1=Math.max(x1,n.x+run.x+Math.max(run.width,run.right));
         y0=Math.min(y0,n.y+run.baseline-run.ascent);y1=Math.max(y1,n.y+run.baseline+run.descent);
@@ -638,7 +701,7 @@ function contentBounds(lay){
   };
   walk(root);
   if(lay.d1Mode==='grid'){x0=Math.min(x0,lay.d1X0);x1=Math.max(x1,lay.d1X1);y0=Math.min(y0,lay.d1BusY);}
-  if(lay.hasDescriptions||layoutPreferences.levelsEnabled){for(const s of getConnSegments(lay)){x0=Math.min(x0,s.x1-s.lw/2,s.x2-s.lw/2);x1=Math.max(x1,s.x1+s.lw/2,s.x2+s.lw/2);y0=Math.min(y0,s.y1-s.lw/2,s.y2-s.lw/2);y1=Math.max(y1,s.y1+s.lw/2,s.y2+s.lw/2);}}
+  if(lay.hasDescriptions||layoutPreferences.levelsEnabled||sourcePresentation){for(const s of getConnSegments(lay)){x0=Math.min(x0,s.x1-s.lw/2,s.x2-s.lw/2);x1=Math.max(x1,s.x1+s.lw/2,s.x2+s.lw/2);y0=Math.min(y0,s.y1-s.lw/2,s.y2-s.lw/2);y1=Math.max(y1,s.y1+s.lw/2,s.y2+s.lw/2);}}
   return{x:x0,y:y0,w:Math.max(1,x1-x0),h:Math.max(1,y1-y0)};
 }
 
@@ -646,30 +709,31 @@ function contentBounds(lay){
 function getConnSegments(lay){
   if(lay.trees)return lay.trees.flatMap(getConnSegments);
   const{root,MD,d1Mode,d1BusY,d1ColX,d1Groups,d1Cols,d1X0}=lay;
-  const d1=root.children;
+  const d1=root.children.filter(n=>n.kind!=='spacer');
   const segs=[];
   const seg=(col,lw,x1,y1,x2,y2)=>segs.push({col,lw,x1,y1,x2,y2});
   const subSegs=p=>{
-    if(!p.children.length)return;
+    if(p.kind==='spacer')return;const connected=p.children.filter(ch=>ch.kind!=='spacer');if(!connected.length)return;
     if(p.subtree?.childMode==='horizontal'){
-      const children=p.children,depth=children[0].depth;
+      const children=connected,depth=children[0].depth;
       const bottom=p.y+Math.max(p.textBlock.bottom,p.textBlock.runs[0].baseline+p.textBlock.runs[0].descent);
       const inkTop=ch=>ch.y+ch.textBlock.runs[0].baseline-ch.textBlock.runs[0].ascent;
       const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(cgap(depth,MD),gap*0.3);
-      const start=bottom+rg,bus=start+(top-start)*C.BUS_MID,center=p.x+mW(p.label,p.fs,p.fw)/2,lw=lnW(depth,MD);
+      const clearance=p.subtree.customSize?lnW(depth,MD)/2+1e-9:0;
+      const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+mW(p.label,p.fs,p.fw)/2,lw=lnW(depth,MD);
       seg(p.col,lw,center,start,center,bus);
-      const centers=children.map(ch=>ch.x+mW(ch.label,ch.fs,ch.fw)/2);
+      const centers=children.map(ch=>ch.x+titleWidth(ch)/2);
       seg(p.col,lw,centers[0],bus,centers[centers.length-1],bus);
-      children.forEach((ch,i)=>seg(p.col,lw,centers[i],bus,centers[i],inkTop(ch)-Math.min(cgap(depth,MD),(inkTop(ch)-bus)*0.3)));
+      children.forEach((ch,i)=>seg(p.col,lw,centers[i],bus,centers[i],inkTop(ch)-Math.max(clearance,Math.min(cgap(depth,MD),(inkTop(ch)-bus)*0.3))));
       children.forEach(subSegs);return;
     }
     const sx=spineXOf(p);
-    const fc=p.children[0];
-    const lastCh=p.children[p.children.length-1];
+    const fc=connected[0];
+    const lastCh=connected[connected.length-1];
     const lmy=lastCh.y+lastCh.fs*lastCh.capFrac;
     const vg=(fc.y-p.y-p.fs-p.textBlock.extraHeight)*C.VG_FRAC;
     seg(p.col,lnW(p.depth+1,MD),sx,p.y+p.fs+p.textBlock.extraHeight+vg,sx,lmy);
-    for(const ch of p.children){
+    for(const ch of connected){
       const cy=ch.y+ch.fs*ch.capFrac;
       seg(p.col,lnW(ch.depth,MD),sx,cy,sx+armLen(ch.depth,MD)*0.70,cy);
     }
@@ -725,10 +789,11 @@ function getConnSegments(lay){
       const d1BaseGap=d1[0].fs*C.GAP_R*C.D0_D1_GAP_MULT;
       const rg=Math.min(cgap(d1[0].depth,MD),d1BaseGap*0.3);
       seg(root.col,lw1,root.cx,d1BusY-(d1BaseGap-rg)*C.BUS_MID,root.cx,d1BusY);
-      seg(root.col,lw1,Math.min(d1X0,root.cx),d1BusY,Math.max(d1ColX[d1Cols-1],root.cx),d1BusY);
+      const activeColumns=d1ColX.filter((_,c)=>d1Groups.some(g=>g.col===c&&g.node.kind!=='spacer'));
+      seg(root.col,lw1,Math.min(activeColumns[0],root.cx),d1BusY,Math.max(activeColumns[activeColumns.length-1],root.cx),d1BusY);
       for(let c=0;c<d1Cols;c++){
         const shaftX=d1ColX[c];
-        const colGs=d1Groups.filter(g=>g.col===c);if(!colGs.length)continue;
+        const colGs=d1Groups.filter(g=>g.col===c&&g.node.kind!=='spacer');if(!colGs.length)continue;
         const lastCh=colGs[colGs.length-1].node;
         seg(root.col,lw1,shaftX,d1BusY,shaftX,lastCh.y+lastCh.fs*lastCh.capFrac);
         for(const g of colGs){
@@ -753,7 +818,7 @@ function drawConn(ctx,lay){
 const PLACEHOLDER_COLOR='rgb(180,178,170)';
 function labelColor(node){return node.placeholder?PLACEHOLDER_COLOR:node.col;}
 function drawLbls(ctx,n){
-  if(!n.synthetic){
+  if(!n.synthetic&&n.kind!=='spacer'){
     ctx.textBaseline='alphabetic';
     for(const run of n.textBlock.runs){
       ctx.fillStyle=run.description?n.col:labelColor(n);
@@ -1093,7 +1158,7 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
     return w*fs*PDF_SCALE/1000;
   };
   const dtNode=n=>{
-    if(!n.synthetic){
+    if(!n.synthetic&&n.kind!=='spacer'){
       const isB=n.fw==='bold';
       const tx=n.depth===0&&n.cx!=null?px(n.cx)-pdfStrW(n.label,isB,n.fs)/2:px(n.x);
       for(const run of n.textBlock.runs)ops.push(renderLabel(tx+run.x*PDF_SCALE,py(n.y+run.baseline),run.text,run.fw==='bold',run.fs,run.description?n.col:labelColor(n)));
@@ -1129,7 +1194,52 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
 }
 
 const st={lay:null,scale:1,panX:0,panY:0};
-const gesture={drag:null,t1d:null,touchMoved:false,startX:0,startY:0,lastTapTime:0,lastTapX:0,lastTapY:0};
+const gesture={drag:null,mouseZoom:null,t1d:null,touchMoved:false,startX:0,startY:0,lastTapTime:0,lastTapX:0,lastTapY:0,sequence:null,twoTap:null,twoTimer:null,lastTwo:null,suppressMouseUntil:0,suppressAux:false,pointerType:'mouse'};
+// Same private Safari identity as the shell; modules remain independent.
+const ipadSafari=navigator.maxTouchPoints>1&&(/iPad/i.test(navigator.userAgent)||navigator.platform==='MacIntel'&&/Macintosh/i.test(navigator.userAgent))&&/AppleWebKit/i.test(navigator.userAgent)&&/Version\//i.test(navigator.userAgent)&&/Safari\//i.test(navigator.userAgent)&&!/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium|Android|Edg\/|OPR\//i.test(navigator.userAgent);
+function canvasInteraction(value){if(typeof opts.onCanvasInteraction==='function'){try{const result=opts.onCanvasInteraction(value);if(result&&typeof result.then==='function')Promise.resolve(result).catch(()=>{});}catch(error){/* Host menu failure cannot interrupt the canvas. */}}}
+const DOUBLE_INTERVAL=150;
+let tapCandidate=null,tapTimer=null,tapPair=null,provisionalPress=null;
+function clearTap(){
+  clearTimeout(tapTimer);tapTimer=null;tapCandidate=null;tapPair=null;provisionalPress=null;
+}
+function confirmSingleTap(candidate){
+  if(candidate&&candidate.channel!=='two-touch'&&!paused&&!document.hidden)
+    canvasInteraction({kind:'tap',input:candidate.channel==='mouse'?'mouse':'touch'});
+}
+function tapPress(channel,x,y,distance){
+  const now=performance.now(),prior=tapCandidate;
+  tapPair=null;
+  if(prior?.channel==='two-touch'&&channel==='one-touch'&&now-prior.time<DOUBLE_INTERVAL){
+    // The first contact may be joining a second chord. Never expire mid-press.
+    clearTimeout(tapTimer);tapTimer=null;provisionalPress=now;return;
+  }
+  const pressedAt=channel==='two-touch'&&provisionalPress!==null?provisionalPress:now;
+  provisionalPress=null;
+  if(!prior)return;
+  clearTimeout(tapTimer);tapTimer=null;tapCandidate=null;
+  if(prior.channel===channel&&pressedAt-prior.time<DOUBLE_INTERVAL&&Math.hypot(x-prior.x,y-prior.y)<distance){
+    tapPair={channel};
+  }else if(pressedAt-prior.time>=DOUBLE_INTERVAL){
+    confirmSingleTap(prior);
+  }
+}
+function tapRelease(channel,x,y,inverse=false){
+  if(tapPair?.channel===channel){
+    clearTap();const r=canvas.getBoundingClientRect();canvasActivity();
+    zoomAt(x-r.left,y-r.top,inverse?1/zoomFactor():zoomFactor());return;
+  }
+  clearTap();
+  const candidate=tapCandidate={channel,x,y,time:performance.now()};
+  tapTimer=setTimeout(()=>{
+    if(tapCandidate!==candidate)return;
+    tapTimer=null;tapCandidate=null;confirmSingleTap(candidate);
+  },DOUBLE_INTERVAL);
+}
+function canvasActivity(){canvasInteraction({kind:'activity'});}
+function insideCanvas(x,y){const r=canvas.getBoundingClientRect();return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;}
+function clearTwoCandidate(){clearTimeout(gesture.twoTimer);gesture.twoTimer=null;gesture.twoTap=null;}
+function cancelGestures(){clearTap();gesture.drag=null;gesture.mouseZoom=null;gesture.t1d=null;gesture.sequence=null;gesture.lastTapTime=0;gesture.lastTwo=null;clearTwoCandidate();canvas.style.cursor='grab';canvasActivity();}
 const kbLift={h:0,targetH:0,animId:null,btnH:0,btnTarget:0,btnAnimId:null};
 const uiState={userTouchedCanvas:false,colorSeed:0};
 let chromeOcclusion=null;
@@ -1192,7 +1302,7 @@ function applyViewportInsets(value,{duration=0}={}){
   container.classList.toggle('map-covered',covered);btnRst.inert=covered;hudEl.inert=covered;
   updateChromeEligibility();updateEmptyHint();
   if(covered){
-    paused=true;pendingRender=pendingRender||rtimer!==null;
+    cancelGestures();paused=true;pendingRender=pendingRender||rtimer!==null;
     clearTimeout(rtimer);rtimer=null;cancelAnimationFrame(_raf);_raf=null;
     cancelAnimationFrame(resizeFrame);resizeFrame=null;
     cancelAnimationFrame(kbLift.animId);kbLift.animId=null;cancelAnimationFrame(kbLift.btnAnimId);kbLift.btnAnimId=null;
@@ -1250,7 +1360,7 @@ function preserveViewportAcrossScaleChange(prevLay,newLay){
   const r=viewportRect(),zoom=st.scale;
   if(!(r.width>0&&r.height>0&&Number.isFinite(zoom)&&zoom>0))return;
   const center={x:r.left+r.width/2,y:r.top+r.height/2},world={x:(center.x-st.panX)/zoom,y:(center.y-st.panY)/zoom};
-  const realNodes=lay=>{const nodes=[];const walk=n=>{if(!n.synthetic)nodes.push(n);n.children.forEach(walk);};walk(lay.root);return nodes;};
+  const realNodes=lay=>{const nodes=[];const walk=n=>{if(!n.synthetic&&n.kind!=='spacer')nodes.push(n);n.children.forEach(walk);};walk(lay.root);return nodes;};
   const previous=layoutTransitions.get(prevLay),next=layoutTransitions.get(newLay);
   let anchor=null;
   if(previous?.revision===next?.revision){
@@ -1265,7 +1375,7 @@ function preserveViewportAcrossScaleChange(prevLay,newLay){
   let scale=zoom,panX,panY;
   const node=anchor&&realNodes(newLay)[anchor.index];
   if(node&&node.fs>0&&Number.isFinite(node.fs)){
-    scale=zoom*anchor.node.fs/node.fs;
+    scale=presentationChanged?zoom:zoom*anchor.node.fs/node.fs;
     panX=st.panX+zoom*anchor.node.x-scale*node.x;
     panY=st.panY+zoom*(anchor.node.y+anchor.node.fs*C.BASELINE_FRAC)-scale*(node.y+node.fs*C.BASELINE_FRAC);
   }else{
@@ -1291,6 +1401,51 @@ function animateFit(dur=C.ANIM_FIT){
   _raf=requestAnimationFrame(step);
 }
 
+// Decorations are transient canvas work. PDF retains its original label/connector path.
+const SEARCH_FILL='rgba(255,220,0,0.55)';
+let searchQuery='',highlightCache=null;
+function highlightGeometry(){
+  if(highlightCache?.layout===st.lay&&highlightCache.query===searchQuery)return highlightCache.rects;
+  const rects=[],query=searchQuery.toLowerCase();
+  const walk=node=>{
+    const source=canonicalTexts.get(node);
+    if(source&&node.kind!=='spacer'){
+      const lower=source.text.toLowerCase(),matches=[];let at=0;
+      while((at=lower.indexOf(query,at))!==-1){matches.push({start:at,end:at+query.length});at+=query.length;}
+      if(matches.length)for(const run of node.textBlock.runs){
+        const range=runSources.get(run);if(!range||!run.text)continue;
+        const clusters=descriptionGraphemes?Array.from(descriptionGraphemes.segment(run.text),p=>({start:p.index,end:p.index+p.segment.length})):null;
+        for(const match of matches){
+          let start=Math.max(range.start,match.start)-range.start,end=Math.min(range.end,match.end)-range.start;
+          if(end<=start)continue;
+          if(clusters){start=clusters.find(c=>c.end>start)?.start??start;end=clusters.find(c=>c.end>=end)?.end??end;}
+          const prefix=inkMetrics(run.text.slice(0,start),run.fs,run.fw).width,ink=inkMetrics(run.text.slice(start,end),run.fs,run.fw),padding=.08*run.fs;
+          const left=node.x+run.x+prefix-Math.max(0,ink.left)-padding,right=node.x+run.x+prefix+Math.max(ink.width,ink.right)+padding;
+          const top=node.y+run.baseline-Math.max(run.ascent,ink.ascent)-padding,bottom=node.y+run.baseline+Math.max(run.descent,ink.descent)+padding;
+          if([left,right,top,bottom].every(Number.isFinite))rects.push({x:left,y:top,w:right-left,h:bottom-top});
+        }
+      }
+    }
+    node.children.forEach(walk);
+  };
+  if(query&&st.lay)walk(st.lay.root);
+  highlightCache={layout:st.lay,query:searchQuery,rects};return rects;
+}
+function drawHighlights(){
+  if(!searchQuery)return;
+  const rects=highlightGeometry(),dpr=devicePixelRatio||1,W=canvas.width/dpr,H=canvas.height/dpr;
+  ctx.save();ctx.setTransform(dpr,0,0,dpr,0,0);ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();ctx.fillStyle=SEARCH_FILL;
+  for(const rect of rects){
+    const w=Math.max(10,rect.w*st.scale),h=Math.max(10,rect.h*st.scale),x=st.panX+(rect.x+rect.w/2)*st.scale-w/2,y=st.panY+(rect.y+rect.h/2)*st.scale-h/2;
+    if(x+w<0||y+h<0||x>W||y>H)continue;
+    ctx.fillRect(x,y,w,h);
+  }
+  ctx.restore();
+}
+function setSearchQuery(query){
+  if(destroyed)return;query=String(query??'').trim();if(query===searchQuery)return;
+  searchQuery=query;highlightCache=null;if(!paused)redraw();
+}
 function draw(){
   if(paused||holdDrawing)return;
   const dpr=devicePixelRatio||1;
@@ -1304,7 +1459,7 @@ function draw(){
   }
   ctx.save();
   ctx.setTransform(st.scale*dpr,0,0,st.scale*dpr,st.panX*dpr,st.panY*dpr);
-  drawConn(ctx,st.lay);drawLbls(ctx,st.lay.root);
+  drawConn(ctx,st.lay);drawHighlights();drawLbls(ctx,st.lay.root);
   ctx.restore();
   const pct=st.scale*100;
   hudEl.textContent=(pct>=1?Math.round(pct):pct.toFixed(pct>=0.1?1:2))+'%';
@@ -1313,8 +1468,8 @@ function redraw(){draw();}
 
 /* ══ ZOOM & PAN ══ */
 function markTouched(){const latest=liveInsets;cancelLiveViewport();uiState.userTouchedCanvas=true;if(latest)applyViewportInsets(latest,{duration:0});cancelAnimationFrame(_raf);_raf=null;cancelAnimationFrame(kbLift.animId);kbLift.animId=null;}
-function zoomAt(cx,cy){
-  const f=Math.max(2.5,layoutPreferences.branchScale);
+const zoomFactor=()=>Math.max(2.5,layoutPreferences.branchScale);
+function zoomAt(cx,cy,f=zoomFactor()){
   const ns=st.scale*f;
   const tx=cx-(cx-st.panX)*(ns/st.scale),ty=cy-(cy-st.panY)*(ns/st.scale);
   const s0=st.scale,x0=st.panX,y0=st.panY,t0=performance.now();
@@ -1327,59 +1482,122 @@ function zoomAt(cx,cy){
   markTouched();_raf=requestAnimationFrame(step);
 }
 listen(canvas,'wheel',e=>{
-  e.preventDefault();markTouched();
+  e.preventDefault();clearTap();canvasActivity();markTouched();
   const r=canvas.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
   const ns=st.scale*(e.deltaY<0?1.1:0.9);
   st.panX=mx-(mx-st.panX)*(ns/st.scale);st.panY=my-(my-st.panY)*(ns/st.scale);
   st.scale=ns;redraw();
 },{passive:false});
+// Outside UI actions invalidate pending taps before their confirmation timer fires.
+for(const type of ['pointerdown','touchstart'])listen(document,type,e=>{if(!canvas.contains(e.target))clearTap();},{capture:true,passive:true});
+listen(document,'keydown',clearTap,true);
+listen(canvas,'pointerdown',e=>{gesture.pointerType=e.pointerType;});
 listen(canvas,'mousedown',e=>{
-  gesture.drag={sx:e.clientX-st.panX,sy:e.clientY-st.panY,moved:false};canvas.style.cursor='grabbing';
+  if(paused||performance.now()<gesture.suppressMouseUntil||e.sourceCapabilities?.firesTouchEvents)return;
+  canvasActivity();
+  if(e.button===0)tapPress('mouse',e.clientX,e.clientY,4);else clearTap();
+  gesture.suppressAux=false;
+  const desktop=gesture.pointerType==='mouse'&&!ipadSafari&&!/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)&&window.matchMedia('(any-pointer:fine) and (any-hover:hover)').matches;
+  if(e.button===1&&e.ctrlKey&&desktop){
+    e.preventDefault();markTouched();gesture.drag=null;gesture.suppressAux=true;
+    const r=canvas.getBoundingClientRect();gesture.mouseZoom={x:e.clientX,y:e.clientY,scale:st.scale,panX:st.panX,panY:st.panY,anchorX:e.clientX-r.left,anchorY:e.clientY-r.top,factor:zoomFactor()};
+  }else gesture.drag={sx:e.clientX-st.panX,sy:e.clientY-st.panY,x:e.clientX,y:e.clientY,time:performance.now(),button:e.button,moved:false};
+  canvas.style.cursor='grabbing';
 });
 listen(window,'mousemove',e=>{
+  const z=gesture.mouseZoom;
+  if(z){
+    if(!e.ctrlKey||!(e.buttons&4)){cancelGestures();return;}
+    e.preventDefault();canvasActivity();
+    const dx=e.clientX-z.x,dy=e.clientY-z.y,distance=dx*dy<=0?Math.sign(dx-dy)*Math.hypot(dx,dy):dx-dy;
+    const scale=z.scale*Math.pow(z.factor,distance/200),panX=z.anchorX-(z.anchorX-z.panX)*scale/z.scale,panY=z.anchorY-(z.anchorY-z.panY)*scale/z.scale;
+    if([scale,panX,panY].every(Number.isFinite)&&scale>0){st.scale=scale;st.panX=panX;st.panY=panY;redraw();}return;
+  }
   if(!gesture.drag)return;
   const nx=e.clientX-gesture.drag.sx,ny=e.clientY-gesture.drag.sy;
-  if(!gesture.drag.moved&&(Math.abs(nx-st.panX)>1||Math.abs(ny-st.panY)>1)){gesture.drag.moved=true;markTouched();}
+  if(!gesture.drag.moved&&(Math.abs(e.clientX-gesture.drag.x)>1||Math.abs(e.clientY-gesture.drag.y)>1)){gesture.drag.moved=true;clearTap();canvasActivity();markTouched();}
   st.panX=nx;st.panY=ny;redraw();
 });
-listen(window,'mouseup',()=>{if(!gesture.drag)return;gesture.drag=null;canvas.style.cursor='grab';});
+listen(window,'mouseup',e=>{
+  if(gesture.mouseZoom){if(e.button===1){e.preventDefault();cancelGestures();}return;}
+  const drag=gesture.drag;if(!drag)return;gesture.drag=null;canvas.style.cursor='grab';
+  if(drag.button===0&&e.button===0&&!drag.moved&&performance.now()-drag.time<=250&&Math.abs(e.clientX-drag.x)<=1&&Math.abs(e.clientY-drag.y)<=1&&insideCanvas(e.clientX,e.clientY))tapRelease('mouse',e.clientX,e.clientY);else clearTap();
+});
+listen(canvas,'auxclick',e=>{if(e.button===1&&(gesture.suppressAux||e.ctrlKey)){e.preventDefault();gesture.suppressAux=false;}});
+listen(window,'keyup',e=>{if(gesture.mouseZoom&&(e.key==='Control'||!e.ctrlKey))cancelGestures();});
+listen(window,'blur',cancelGestures);
+listen(document,'visibilitychange',()=>{if(document.hidden)cancelGestures();});
+listen(canvas,'pointercancel',cancelGestures);
 listen(canvas,'dblclick',e=>{
-  gesture.drag=null;const r=canvas.getBoundingClientRect();zoomAt(e.clientX-r.left,e.clientY-r.top);
+  e.preventDefault(); // The custom release/press recognizer is the only double-gesture owner.
 });
 function td(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}
 function tm(t){const r=canvas.getBoundingClientRect();return{x:(t[0].clientX+t[1].clientX)/2-r.left,y:(t[0].clientY+t[1].clientY)/2-r.top};}
+function applyPinch(touches){
+  if(touches.length!==2||gesture.t1d===null)return;
+  const nd=td(touches),m=tm(touches),ns=st.scale*nd/gesture.t1d;
+  if(!(nd>0&&gesture.t1d>0&&Number.isFinite(ns)&&ns>0))return;
+  if(!uiState.userTouchedCanvas&&Math.abs(ns/st.scale-1)>0.001)markTouched();
+  st.panX=m.x-(m.x-st.panX)*(ns/st.scale);st.panY=m.y-(m.y-st.panY)*(ns/st.scale);
+  st.scale=ns;gesture.t1d=nd;
+}
+function promotePinch(touches){clearTap();clearTwoCandidate();gesture.lastTwo=null;if(gesture.sequence)gesture.sequence.established=true;applyPinch(touches);}
+function trackTwo(touches){
+  const tap=gesture.twoTap;if(!tap)return false;
+  for(const t of touches){const original=tap.points.get(t.identifier);if(!original)return false;tap.latest.set(t.identifier,{identifier:t.identifier,clientX:t.clientX,clientY:t.clientY});if(Math.hypot(t.clientX-original.clientX,t.clientY-original.clientY)>6)return false;}
+  const points=[...tap.latest.values()],mid=tm(points);
+  return Math.hypot(mid.x-tap.mid.x,mid.y-tap.mid.y)<=6&&Math.abs(td(points)-tap.distance)<=6;
+}
 listen(canvas,'touchstart',e=>{
-  e.preventDefault();
-  if(e.touches.length===1){
-    gesture.drag={sx:e.touches[0].clientX-st.panX,sy:e.touches[0].clientY-st.panY};
-    gesture.startX=e.touches[0].clientX;gesture.startY=e.touches[0].clientY;
-    gesture.touchMoved=false;gesture.t1d=null;
-  }else if(e.touches.length===2){gesture.drag=null;gesture.touchMoved=true;gesture.t1d=td(e.touches);}
+  e.preventDefault();if(paused)return;canvasActivity();gesture.suppressMouseUntil=performance.now()+800;
+  const now=performance.now();
+  if(!gesture.sequence&&e.touches.length>=2)gesture.sequence={time:now,multi:true,established:false};
+  if(e.touches.length===1&&!gesture.sequence){
+    const t=e.touches[0];tapPress('one-touch',t.clientX,t.clientY,40);gesture.sequence={time:now,multi:false,established:false,firstId:t.identifier};
+    gesture.drag={sx:t.clientX-st.panX,sy:t.clientY-st.panY};gesture.startX=t.clientX;gesture.startY=t.clientY;gesture.touchMoved=false;gesture.t1d=null;
+  }else if(e.touches.length===2){
+    const seq=gesture.sequence;gesture.drag=null;gesture.touchMoved=true;gesture.lastTapTime=0;gesture.t1d=td(e.touches);
+    if(seq)seq.multi=true;
+    if(ipadSafari&&seq&&!seq.established&&now-seq.time<=100){
+      clearTwoCandidate();const points=Array.from(e.touches,t=>({identifier:t.identifier,clientX:t.clientX,clientY:t.clientY}));
+      const origins=points.map(t=>t.identifier===seq.firstId?{...t,clientX:gesture.startX,clientY:gesture.startY}:t);
+      const pairMid=tm(e.touches),rect=canvas.getBoundingClientRect();tapPress('two-touch',pairMid.x+rect.left,pairMid.y+rect.top,40);
+      gesture.twoTap={points:new Map(origins.map(t=>[t.identifier,t])),latest:new Map(points.map(t=>[t.identifier,t])),mid:tm(e.touches),distance:td(e.touches),released:new Set()};
+      gesture.twoTimer=setTimeout(()=>{gesture.twoTimer=null;if(gesture.twoTap){const touches=[...gesture.twoTap.latest.values()].filter(t=>!gesture.twoTap.released.has(t.identifier));promotePinch(touches);redraw();}},Math.max(0,251-(now-seq.time)));
+    }else{clearTap();clearTwoCandidate();gesture.lastTwo=null;if(seq)seq.established=true;}
+  }else if(e.touches.length>2){clearTap();clearTwoCandidate();gesture.lastTwo=null;gesture.lastTapTime=0;gesture.drag=null;gesture.t1d=null;if(gesture.sequence){gesture.sequence.multi=true;gesture.sequence.established=true;}}
 },{passive:false});
 listen(canvas,'touchmove',e=>{
-  e.preventDefault();
-  if(e.touches.length===1&&gesture.drag){
+  e.preventDefault();if(paused)return;canvasActivity();
+  if(gesture.twoTap){if(trackTwo(e.touches)&&performance.now()-gesture.sequence.time<=250)return;promotePinch(e.touches);}
+  else if(e.touches.length===1&&gesture.drag&&!gesture.sequence?.multi){
     const dx=e.touches[0].clientX-gesture.startX,dy=e.touches[0].clientY-gesture.startY;
-    if(!gesture.touchMoved&&Math.hypot(dx,dy)>3){gesture.touchMoved=true;markTouched();}
+    if(!gesture.touchMoved&&Math.hypot(dx,dy)>3){gesture.touchMoved=true;clearTap();gesture.sequence.established=true;gesture.lastTwo=null;markTouched();}
     st.panX=e.touches[0].clientX-gesture.drag.sx;st.panY=e.touches[0].clientY-gesture.drag.sy;
-  }else if(e.touches.length===2&&gesture.t1d!==null){
-    const nd=td(e.touches),m=tm(e.touches),ns=st.scale*nd/gesture.t1d;
-    if(!uiState.userTouchedCanvas&&Math.abs(ns/st.scale-1)>0.001)markTouched();
-    st.panX=m.x-(m.x-st.panX)*(ns/st.scale);st.panY=m.y-(m.y-st.panY)*(ns/st.scale);
-    st.scale=ns;gesture.t1d=nd;
-  }
+  }else if(e.touches.length===2&&gesture.t1d!==null)applyPinch(e.touches);
   redraw();
 },{passive:false});
 listen(canvas,'touchend',e=>{
-  if(e.changedTouches.length===1&&!gesture.touchMoved){
-    const now=performance.now();
-    const tx=e.changedTouches[0].clientX,ty=e.changedTouches[0].clientY;
-    if(now-gesture.lastTapTime<300&&Math.hypot(tx-gesture.lastTapX,ty-gesture.lastTapY)<40){
-      const r=canvas.getBoundingClientRect();zoomAt(tx-r.left,ty-r.top);gesture.lastTapTime=0;
-    }else{gesture.lastTapTime=now;gesture.lastTapX=tx;gesture.lastTapY=ty;}
+  gesture.suppressMouseUntil=performance.now()+800;
+  const seq=gesture.sequence;if(!seq)return;
+  if(gesture.twoTap){
+    const valid=trackTwo([...e.touches,...e.changedTouches]),tap=gesture.twoTap;
+    for(const t of e.changedTouches)tap.released.add(t.identifier);
+    if(!valid||performance.now()-seq.time>250){clearTap();clearTwoCandidate();gesture.lastTwo=null;}
+    else if(e.touches.length===0&&tap.released.size===2){
+      const mid=tm([...tap.latest.values()]),r=canvas.getBoundingClientRect();tapRelease('two-touch',mid.x+r.left,mid.y+r.top,true);
+      clearTwoCandidate();
+    }
   }
-  gesture.drag=null;gesture.t1d=null;gesture.touchMoved=false;
+  if(e.touches.length)return;
+  if(!seq.multi)gesture.lastTwo=null;
+  if(!seq.multi&&!gesture.touchMoved&&performance.now()-seq.time<=250&&e.changedTouches.length===1&&Math.hypot(e.changedTouches[0].clientX-gesture.startX,e.changedTouches[0].clientY-gesture.startY)<=3&&insideCanvas(e.changedTouches[0].clientX,e.changedTouches[0].clientY)){
+    const now=performance.now(),t=e.changedTouches[0],tx=t.clientX,ty=t.clientY;
+    tapRelease('one-touch',tx,ty);
+  }else if(!seq.multi){clearTap();gesture.lastTapTime=0;}
+  gesture.drag=null;gesture.t1d=null;gesture.touchMoved=false;gesture.sequence=null;
 });
+listen(canvas,'touchcancel',cancelGestures);
 /* ══ STRING INPUT / SETTINGS ══ */
 function schedRender(){pendingRender=true;clearTimeout(rtimer);if(paused){rtimer=null;return;}rtimer=setTimeout(()=>{rtimer=null;render();},C.RENDER_DEBOUNCE);}
 function flushRender(){clearTimeout(rtimer);rtimer=null;render();}
@@ -1395,17 +1613,17 @@ function render(){
     st.lay=null;pendingColor=false;uiState.userTouchedCanvas=false;emptyEl.style.display='flex';draw();return;
   }
   const root=parse(text);if(!root)return;
-  flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts);layoutPreferences.observeRoot(root,sourceReady,sourceStats);
+  flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts);attachPresentation(root,sourcePresentation);layoutPreferences.observeRoot(root,sourceReady,sourceStats);
   const prevLay=st.lay;
   st.lay=layout(root,uiState.colorSeed);st.lay.hasDescriptions=!!(sourceNodeTexts&&sourceNodeTexts.some(text=>text.includes('\n')));pendingColor=false;emptyEl.style.display='none';
   const bounds=contentBounds(st.lay);fitBounds.set(st.lay,bounds);
   layoutTransitions.set(st.lay,{scale:layoutPreferences.branchScale,revision:sourceRevision,bounds});
   if(uiState.userTouchedCanvas&&prevLay){
-    if(layoutTransitions.get(prevLay)?.scale!==layoutPreferences.branchScale)preserveViewportAcrossScaleChange(prevLay,st.lay);
+    if(presentationChanged||layoutTransitions.get(prevLay)?.scale!==layoutPreferences.branchScale)preserveViewportAcrossScaleChange(prevLay,st.lay);
     else if(st.lay.MD!==prevLay.MD)preserveViewportAcrossLayoutChange(prevLay,st.lay);
   }
   if(!holdDrawing&&canvas.clientWidth>0&&canvas.clientHeight>0&&!uiState.userTouchedCanvas)autoFit();
-  draw();
+  presentationChanged=false;lastPresentationRender=performance.now();draw();
 }
 function setText(text,options={}){
   if(destroyed)return;
@@ -1423,9 +1641,19 @@ function setText(text,options={}){
     if(!value||!Number.isSafeInteger(value.maxDepth)||value.maxDepth<0||!Number.isSafeInteger(value.maxSiblings)||value.maxSiblings<0){const error=new TypeError('Invalid complete-outline statistics');reportError(error);throw error;}
     stats={maxDepth:value.maxDepth,maxSiblings:value.maxSiblings};
   }
-  if(text===sourceText&&placeholders.join(',')===sourcePlaceholders.join(',')&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats))return;
-  sourceRevision++;sourceStats=stats;sourceReady=true;
-  sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;if(!text.trim())flushRender();else schedRender();
+  let presentation=null;
+  if(options&&'nodePresentation' in options){
+    const values=options.nodePresentation,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
+    if(!Array.isArray(values)||values.length!==count||values.some(p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
+    presentation=values.map(p=>({kind:p.kind,mapSize:mapSizeUnits(p.mapSize)/MAP_SIZE_UNITS}));
+    const parsed=parse(text),stack=parsed?(parsed.synthetic?parsed.children.slice().reverse():[parsed]):[];let index=0;
+    while(stack.length){const n=stack.pop(),p=presentation[index];if(p.kind==='spacer'&&(n.children.length||nodeTexts&&nodeTexts[index]!=='')){const error=new TypeError('A spacer must be an empty leaf');reportError(error);throw error;}index++;for(let i=n.children.length-1;i>=0;i--)stack.push(n.children[i]);}
+  }
+  if(text===sourceText&&JSON.stringify(presentation)===JSON.stringify(sourcePresentation)&&placeholders.join(',')===sourcePlaceholders.join(',')&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats))return;
+  const onlyPresentation=text===sourceText&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats)&&placeholders.join(',')===sourcePlaceholders.join(',');
+  if(!onlyPresentation)sourceRevision++;presentationChanged=presentationChanged||onlyPresentation;sourceStats=stats;sourcePresentation=presentation;sourceReady=true;
+  sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;
+  if(!text.trim())flushRender();else if(onlyPresentation){pendingRender=true;if(!paused&&rtimer===null)rtimer=setTimeout(()=>{rtimer=null;render();},Math.max(0,50-(performance.now()-lastPresentationRender)));}else schedRender();
 }
 function getSettingBounds(){return layoutPreferences.getSettingBounds();}
 function getSettings(){return{...layoutPreferences.getSettings(),colorSeed:uiState.colorSeed};}
@@ -1538,7 +1766,8 @@ listen(document.fonts,'loadingdone',()=>{
   fitBounds=new WeakMap();_capFracCache.clear();render();
 });
 function destroy(){
-  if(destroyed)return;destroyed=true;pendingColor=false;
+  clearTap();
+  if(destroyed)return;cancelGestures();destroyed=true;pendingColor=false;highlightCache=null;searchQuery='';
   observer.disconnect();listeners.forEach(remove=>remove());
   timers.forEach(id=>window.clearTimeout(id));frames.forEach(id=>window.cancelAnimationFrame(id));
   objectURLs.forEach(url=>URL.revokeObjectURL(url));objectURLs.clear();
@@ -1548,7 +1777,7 @@ function destroy(){
 resizeCanvas();render();
 if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
-return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed};
+return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.9.1',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1','root-order-v1','branch-scale-v1'],mount};
+window.MindMap={version:'1.12.0',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();
