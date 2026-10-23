@@ -98,15 +98,14 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 .layout-hint{font-size:11px;color:var(--mute)}
 #settings-controls .layout-hint[hidden],#settings-controls .section-title[hidden]{display:none}
 
-.root-order{grid-column:1/-1;display:flex;min-width:0;height:31px;margin:0;padding:0;border:1px solid var(--line);border-radius:6px;background:var(--btn);overflow:hidden}
+/* Native radios in a shared button surface; selection uses fill, not a bright edge. */
+.root-order{grid-column:1/-1;display:flex;min-width:0;height:31px;margin:0;padding:2px;gap:2px;border:1px solid var(--line);border-radius:7px;background:var(--btn)}
 .root-order label{position:relative;display:flex;flex:1 1 50%;min-width:0;align-items:center;justify-content:center;cursor:pointer;font-size:12px}
-.root-order label+label{border-left:1px solid var(--line)}
 .root-order input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
-.root-order span{display:flex;align-items:center;justify-content:center;align-self:stretch;width:100%;border:1px solid transparent;color:var(--mute)}
-.root-order label:first-child span{border-radius:5px 0 0 5px}
-.root-order label:last-child span{border-radius:0 5px 5px 0}
-.root-order input:checked+span{background:var(--btn);border-color:var(--accent);color:var(--ink)}
-.root-order input:focus-visible+span{outline:2px solid var(--accent);outline-offset:-4px}
+.root-order span{display:flex;align-items:center;justify-content:center;align-self:stretch;width:100%;border-radius:4px;color:var(--mute);white-space:nowrap}
+@media(hover:hover){.root-order input:not(:checked):not(:disabled)+span:hover{background:var(--halo);color:var(--ink)}}
+.root-order input:checked+span{background:color-mix(in srgb,var(--accent) 18%,var(--btn));color:#fff}
+.root-order input:focus-visible+span{outline:2px solid var(--ink);outline-offset:-2px}
 .root-order input:disabled+span{opacity:.5;cursor:default}
 /* Bounded compact Map options; external chrome retains its dimensions. */
 #map-options{padding:12px}
@@ -179,8 +178,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.11.2' },
-  mindmap: { src: './mindmap.js', v: '1.12.0' }
+  outliner: { src: './outliner.js', v: '1.11.3' },
+  mindmap: { src: './mindmap.js', v: '1.12.3' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, presentationSupported = true) {
@@ -761,7 +760,7 @@ divider.addEventListener('pointerdown',event=>{
   const current=interruptGeometry();
   // Repeating the committed rectangle cancels an older fit without computing a new target.
   commitViewport(viewportLeft,0);
-  drag={id:event.pointerId,type:event.pointerType,x:event.clientX,y:event.clientY,r0:current.width+current.left,r:current.width+current.left,fraction,tracking:false,right:false,resume};
+  drag={id:event.pointerId,type:event.pointerType,x:event.clientX,y:event.clientY,r0:current.width+current.left,r:current.width+current.left,fraction,tracking:false,resume};
   divider.setPointerCapture(event.pointerId);
 });
 divider.addEventListener('pointermove',event=>{
@@ -774,7 +773,6 @@ divider.addEventListener('pointermove',event=>{
   }
   const r=Math.max(0,Math.min(W,event.clientX-(drag.x-drag.r0)));
   drag.r=r;applyGeometry(Math.max(O,r),Math.min(0,r-O));
-  drag.right=r>W-M;
 });
 function endDrag(event,cancelled=false){
   if(!drag||event.pointerId!==drag.id)return;
@@ -844,7 +842,11 @@ let blockedScaleAction=null;
 const scaleActionStart=event=>{const button=event.target.closest?.('#scale-down,#scale-up,#scale-reset');if(button)blockedScaleAction=scaleComposing||seedHistory.composing||event.isComposing||event.keyCode===229?button:null;};
 document.addEventListener('pointerdown',scaleActionStart,{capture:true,passive:true});
 document.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '||event.keyCode===229)scaleActionStart(event);},true);
-for(const [id,delta]of [['scale-down',-10],['scale-up',10],['scale-reset',0]])$(id).addEventListener('click',event=>{if(id!=='scale-reset'&&numericFactory)return;return ((event)=>{if(blockedScaleAction===event.currentTarget){blockedScaleAction=null;return;}commitScale(delta,id==='scale-reset'?2.5:scaleInput.value);})(event);});
+for(const [id,delta]of [['scale-down',-10],['scale-up',10],['scale-reset',0]])$(id).addEventListener('click',event=>{
+  if(id!=='scale-reset'&&numericFactory)return;
+  if(blockedScaleAction===event.currentTarget){blockedScaleAction=null;return;}
+  commitScale(delta,id==='scale-reset'?2.5:scaleInput.value);
+});
 let lengthComposing=false,lengthBlurPending=false,blockedLengthAction=null;
 const lengthInput=$('length-ratio');
 function commitLength(delta=0){
@@ -863,7 +865,11 @@ lengthInput.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.is
 const lengthActionStart=event=>{const button=event.target.closest?.('#length-down,#length-up,#length-enabled');if(button)blockedLengthAction=lengthComposing||seedHistory.composing||event.isComposing||event.keyCode===229?button:null;};
 document.addEventListener('pointerdown',lengthActionStart,{capture:true,passive:true});
 document.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '||event.keyCode===229)lengthActionStart(event);},true);
-for(const [id,delta]of [['length-down',-10],['length-up',10]])$(id).addEventListener('click',event=>{if(numericFactory)return;return ((event)=>{if(blockedLengthAction===event.currentTarget){blockedLengthAction=null;return;}commitLength(delta);})(event);});
+for(const [id,delta]of [['length-down',-10],['length-up',10]])$(id).addEventListener('click',event=>{
+  if(numericFactory)return;
+  if(blockedLengthAction===event.currentTarget){blockedLengthAction=null;return;}
+  commitLength(delta);
+});
 $('length-enabled').addEventListener('change',()=>{if(blockedLengthAction===$('length-enabled')){blockedLengthAction=null;$('length-enabled').checked=settings.lengthLimit.enabled;return;}if(!$('length-enabled').disabled)changeSettings({lengthLimit:{enabled:$('length-enabled').checked}});});
 function changeSettings(partial) {flushSync();settingsPending=false;persistSettings(mapCall('setSettings',partial));}
 for(const order of ['down','across'])$('root-order-'+order).addEventListener('change',event=>{if(event.target.checked&&!event.target.disabled)changeSettings({rootLayout:{order}});});
@@ -922,7 +928,9 @@ for(const id of [...Object.keys(layoutNumbers),'color-seed']){
   $(id).addEventListener('change',()=>commitNumber(id));
   $(id).addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229){event.preventDefault();commitNumber(id);}});
 }
-for(const [id,input,delta]of [...Object.entries(layoutNumbers).flatMap(([input,row])=>[[row.down,input,-1],[row.up,input,1]]),['seed-down','color-seed',-1],['seed-up','color-seed',1]])$(id).addEventListener('click',()=>{if(!numericFactory)commitNumber(input,delta);});
+// Compatibility clicks and held controls share the same button/input/direction table.
+const integerButtons=[...Object.entries(layoutNumbers).flatMap(([input,row])=>[[row.down,input,-1],[row.up,input,1]]),['seed-down','color-seed',-1],['seed-up','color-seed',1]];
+for(const [id,input,delta]of integerButtons)$(id).addEventListener('click',()=>{if(!numericFactory)commitNumber(input,delta);});
 $('seed-reset').addEventListener('click',()=>{
   if(seedHistory.enabled){if(!seedHistory.settleSeedDraft())return;seedHistory.commitSeed(0);}
   else changeSettings({colorSeed:0});
@@ -948,7 +956,7 @@ function bindNumericControls(module){
   if(!module.capabilities.includes('numeric-stepper-v1')||typeof module.createNumericStepper!=='function')return;
   numericFactory=module.createNumericStepper;
   if(module.capabilities.includes('numeric-select-all-v1')&&typeof module.bindNumericInputs==='function')numericHolds.push(module.bindNumericInputs($('map-options')));
-  const entries=[...Object.entries(layoutNumbers).flatMap(([input,row])=>[[row.down,input,-1],[row.up,input,1]]),['seed-down','color-seed',-1],['seed-up','color-seed',1],['scale-down','branch-scale',-1],['scale-up','branch-scale',1],['length-down','length-ratio',-1],['length-up','length-ratio',1]];
+  const entries=[...integerButtons,['scale-down','branch-scale',-1],['scale-up','branch-scale',1],['length-down','length-ratio',-1],['length-up','length-ratio',1]];
   for(const [id,inputId,direction]of entries){
     const input=$(inputId),scale=inputId==='branch-scale';
     numericHolds.push(numericFactory({button:$(id),direction,scale,allowed:()=>!input.disabled&&!seedHistory.composing&&!scaleComposing&&!lengthComposing&&!$('map-options').hidden,

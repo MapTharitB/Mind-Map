@@ -1,4 +1,4 @@
-/* Outliner version 1.11.2 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.11.3 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -30,7 +30,7 @@ function createNumericStepper(config){
       try{button.releasePointerCapture(a.id);}catch(_){}
     }
   }
-  // Hold time and horizontal distance use the same value curve and publication budget.
+  // Hold time and projected distance use the same value curve and publication budget.
   function scaledValue(a,direction,seconds,drag=false){
     const bounds=config.bounds(),elapsed=Math.max(0,seconds),ramp=Math.max(0,Math.min(1.4,elapsed-.3));
     const delta=(drag?0:.01)+.5*Math.min(elapsed,.3)+.5*ramp+
@@ -40,8 +40,9 @@ function createNumericStepper(config){
   function publishPending(a,now){
     if(a.latest!==a.last&&now-a.publishedAt>=50){a.publishedAt=now;publishScale(a,a.latest);}
   }
-  function drag(a,x){
-    const distance=x-a.dragX;
+  function drag(a,x,y){
+    const dx=x-a.dragX,dy=y-a.dragY;
+    const distance=dx*dy<=0?Math.sign(dx-dy)*Math.hypot(dx,dy):dx-dy;
     if(config.scale){
       a.latest=scaledValue(a,Math.sign(distance),Math.abs(distance)/120,true);
       publishPending(a,performance.now());
@@ -49,24 +50,30 @@ function createNumericStepper(config){
         a.frame=null;if(active!==a)return;if(!usable()){finish();return;}
         publishPending(a,now);if(a.latest!==a.last)a.frame=requestAnimationFrame(flush);
       });
-      const bounds=config.bounds();if(a.latest===bounds.min||a.latest===bounds.max){a.value=a.latest;a.dragX=x;}
+      const bounds=config.bounds();if(a.latest===bounds.min||a.latest===bounds.max){a.value=a.latest;a.dragX=x;a.dragY=y;}
     }else{
       const steps=Math.trunc(distance/12),delta=steps-a.dragSteps;
-      if(delta){config.step(Math.sign(delta),Math.abs(delta));a.dragSteps=steps;}
+      if(delta){
+        config.step(Math.sign(delta),Math.abs(delta));a.dragSteps=steps;
+        const bounds=config.bounds?.(),value=Number(config.read());
+        if(bounds&&(value===bounds.min&&distance<0||value===bounds.max&&distance>0)){
+          a.value=value;a.dragX=x;a.dragY=y;a.dragSteps=0;
+        }
+      }
     }
   }
   function beginDrag(a){
     clearTimeout(a.timer);cancelAnimationFrame(a.frame);a.frame=null;
     // Transition from the last visible value, without a second history session.
-    a.dragging=true;a.value=Number(config.read());a.last=a.latest=a.value;a.dragX=a.x;a.dragSteps=0;
+    a.dragging=true;a.value=Number(config.read());a.last=a.latest=a.value;a.dragX=a.x;a.dragY=a.y;a.dragSteps=0;
   }
   function move(event){
     const a=active;if(!a||event.pointerId!==a.id)return;
-    a.x=event.clientX;
+    a.x=event.clientX;a.y=event.clientY;
     if(!a.held)return;
     if(!usable()){finish();return;}
-    if(!a.dragging&&Math.abs(a.x-a.pressX)>=8)beginDrag(a);
-    if(a.dragging){event.preventDefault();drag(a,a.x);}
+    if(!a.dragging&&Math.hypot(a.x-a.pressX,a.y-a.pressY)>=8)beginDrag(a);
+    if(a.dragging){event.preventDefault();drag(a,a.x,a.y);}
   }
   function tick(now){
     const a=active;
@@ -92,13 +99,13 @@ function createNumericStepper(config){
     a.held=true;a.value=Number(config.read());a.last=a.latest=a.value;
     a.repeatAt=performance.now();a.publishedAt=a.repeatAt-50;
     try{button.setPointerCapture(a.id);}catch(_){}
-    if(Math.abs(a.x-a.pressX)>=8)beginDrag(a);
+    if(Math.hypot(a.x-a.pressX,a.y-a.pressY)>=8)beginDrag(a);
     else if(config.valueAt)tick(a.repeatAt);else a.frame=requestAnimationFrame(tick);
   }
   function press(event){
     finish();suppressClick=false;
     if(event.button!==0||event.isPrimary===false||event.isComposing||event.keyCode===229||!usable())return;
-    const a=active={id:event.pointerId,held:false,dragging:false,pressX:event.clientX,x:event.clientX,timer:null,frame:null};
+    const a=active={id:event.pointerId,held:false,dragging:false,pressX:event.clientX,pressY:event.clientY,x:event.clientX,y:event.clientY,timer:null,frame:null};
     // Only an active press observes DOM lifetime/availability changes.
     observer=new MutationObserver(()=>{if(active&&!usable())finish();});
     observer.observe(document.documentElement,{subtree:true,attributes:true,childList:true,
@@ -1986,5 +1993,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.11.2', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.11.3', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

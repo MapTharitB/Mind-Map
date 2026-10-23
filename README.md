@@ -1,6 +1,6 @@
 # MindMapOutliner
 
-Unpublished map features candidate: **Outliner1.11.2 / MindMap1.12.0 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+Unpublished map features candidate: **Outliner1.11.3 / MindMap1.12.3 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
 
 Open `index.html` by double-clicking it. Keep these four files together: `index.html`, `outliner.js`, `mindmap.js`, `README.md`. No server, build, framework, bundler or installation is required. The complete Outliner is the source of truth; Mind Map is its live view. This folder is the entire upload package.
 
@@ -134,8 +134,8 @@ Edit the single commented `MODULES` block in `index.html`:
 
 ```js
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.11.2' },
-  mindmap: { src: './mindmap.js', v: '1.12.0' }
+  outliner: { src: './outliner.js', v: '1.11.3' },
+  mindmap: { src: './mindmap.js', v: '1.12.3' }
 };
 ```
 
@@ -452,3 +452,22 @@ The native numeric Enter handlers keep their existing commit/validation/recovery
 The218px node menu retains its original horizontal content insets. Reset reaches the right content edge; the composite number control starts at the matching left content edge. Its arrow cells expand equally into the freed space; the number field stays fitted to1000.00. The1px enclosing stepper border accounts for the arrow cell's inner edge. No Map options widths or other UI dimensions change.
 
 Evidence, known limits, exact source changes, backups and narrow owner steps: ../dev/numeric-submit-repair/report.md. The older dev/numeric-drag-update report describes the previous1.11.1 arrangement. This correction does not supersede the unresolved extreme-size PDF limitation or establish physical Safari/IME/D6 acceptance. No upload/publication occurred.
+
+
+## Behavior-preserving maintenance — 2026-10-23
+
+Outliner1.11.2 / MindMap1.12.1 / API1. The shell shares one layout/Seed button table between compatibility clicks and held controls; Scale/Length callbacks are simplified. Obsolete private gesture/divider fields and an unused touch timestamp are removed. Map input reuses its source comparison for no-op and presentation-only updates. Outliner bytes, markup/CSS, public APIs, data/storage, numeric curves, active gesture thresholds, rendering/Thai/PDF implementation and resource URLs are unchanged. This maintenance adds no feature or visual change. The pre-existing extreme-size PDF limitation and outstanding physical-device checks remain; no upload/publication.
+
+
+## Connector families and two-axis numeric dragging — 2026-10-23
+
+Outliner1.11.3 / MindMap1.12.2 / API1. This section supersedes the earlier horizontal-only arrow description. Every enabled numeric arrow retains its original tap, 300ms hold and domain curve. After an 8px radial movement, dragging right/up/up-right increases and the opposite decreases; equal up-left/down-right motion cancels. Dragging stops timed repeat, returns to the established anchor value at zero displacement and rebases both coordinates at limits. Size/Seed keep one gesture history entry; continuous previews retain the 20Hz budget and exact final value.
+
+Each real parent uses the equal logarithmic mean of its direct rendered real children's growth-only Map Sizes: exp(mean(log(max(1,size)))). Empty families use1 and homogeneous sizes return exactly their effective size. Spacers never vote; synthetic forest roots remain independent. The one family factor multiplies original depth/global-Scale connector widths, arms and ordinary gaps once. Actual measured text, Thai marks, descriptions and two-dimensional spacer boxes keep their own sizes and clearance. All Map Sizes1 retain exact default geometry and rendering at the same font/options/view state. No new control, capability or storage key is introduced.
+
+The protected PDF exporter/resources are unchanged. Default real-font PDF bytes match the start snapshot. Manageable mixed/uniform exports show the new shared connectors; the previously demonstrated extreme-size PDF missing-title/blank-page limitation remains unresolved. The whole candidate is not fully accepted; physical Safari numeric direction checks remain pending. Development report: ../dev/connector-scaling-implementation/report.md. No upload or publication occurred.
+
+
+## Vertical stack anchor — 2026-10-23
+
+Outliner1.11.3 / MindMap1.12.3 / API1, unpublished. A vertical stack's preferred connector offset now follows direct real children through the existing family growth factor, measured from the parent's base font. Changing only the parent's Map Size preserves that local offset until its current title's right ink edge caps the centerline. Regrowing the title releases the cap without remembered position. Default geometry, family strokes/arms/gaps and horizontal bus/column policies remain unchanged. Whole-map packing and fit can still move. The known extreme-size PDF title omission remains unresolved; physical Safari observations are pending.

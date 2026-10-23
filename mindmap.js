@@ -1,4 +1,4 @@
-/* MindMap 1.12.0 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.12.3 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -343,11 +343,36 @@ function lastLeafFs(n){return n.children.length?lastLeafFs(n.children[n.children
 
 /* ══ ARM / SPINE HELPERS ══ */
 const armLen=(d,MD)=>fsz(d,MD)*C.ARM_K;
+// Ephemeral direct-child metrics: no spacer/synthetic vote and no inherited growth.
+function prepareFamily(node,MD){
+  let count=0,sum=0,first=1,max=1,homogeneous=true,unit=0;
+  for(const ch of node.children){
+    if(ch.kind==='spacer')continue;
+    const value=Math.max(1,ch.mapSize??1);
+    if(!count)first=value;else if(value!==first)homogeneous=false;
+    count++;sum+=Math.log(value);max=Math.max(max,value);unit=Math.max(unit,ch.baseFs);
+  }
+  const growth=node.synthetic||!count?1:homogeneous?first:clamp(Math.exp(sum/count),1,max);
+  node.family={count,growth,unit:unit||Math.max(0,...node.children.map(ch=>ch.baseFs))};
+  for(const ch of node.children)ch.incomingWidth=familyWidth(node,ch.depth,MD);
+}
+const grow=(node,value)=>node.family.growth===1?value:value*node.family.growth;
+const familyWidth=(node,d,MD)=>grow(node,lnW(d,MD));
+const familyArm=(node,d,MD)=>grow(node,armLen(d,MD));
+const familyGap=(node,d,MD)=>grow(node,cgap(d,MD));
+const familyUnit=node=>grow(node,node.family.unit);
+const structuralTitle=n=>n.structuralTitleWidth;
+const familySubGap=node=>grow(node,node.children[0].baseFs*C.SUB_GAP_R*((node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1));
 
+// Vertical stack anchor: base-font character rule, direct-child growth, actual title ink cap.
+// Exact local defaults and synthetic/spacer helper behavior retain their original arithmetic.
 function spineOffsetOf(node){
-  const c=[...node.label],w1=c.length?mW(c[0],node.fs,node.fw):0;
+  const helper=node.synthetic||node.kind==='spacer',fs=helper?node.fs:node.baseFs;
+  const c=[...node.label],w1=c.length?mW(c[0],fs,node.fw):0;
   const effectiveLen=c.filter(ch=>!isThaiSpineCombining(ch.codePointAt(0))).length;
-  return (effectiveLen===1?w1/2:w1);
+  const offset=effectiveLen===1?w1/2:w1;
+  if(helper||(node.mapSize??1)===1&&node.family.growth===1)return offset;
+  return Math.min(grow(node,offset),Math.max(0,node.textBlock.runs[0].right));
 }
 
 function spineXOf(node){return node.x+spineOffsetOf(node);}
@@ -356,7 +381,7 @@ function assignSubtreeX(node,MD){
   if(node.subtree){for(const offset of node.subtree.childOffsets){offset.node.x=node.x+offset.x;assignSubtreeX(offset.node,MD);}return;}
   const sx=spineXOf(node);
   node.children.filter(ch=>ch.kind!=='spacer').forEach(ch=>{
-    ch.x=sx+armLen(ch.depth,MD);
+    ch.x=sx+familyArm(node,ch.depth,MD);
     assignSubtreeX(ch,MD);
   });
 }
@@ -368,7 +393,7 @@ function colW(n,MD){
     const r=rx+nodeWidth(node);
     if(r>mx)mx=r;
     const sx=rx+spineOffsetOf(node);
-    node.children.forEach(ch=>wk(ch,sx+armLen(ch.depth,MD)));
+    node.children.forEach(ch=>wk(ch,sx+familyArm(node,ch.depth,MD)));
   };
   wk(n,0);
   return mx;
@@ -381,9 +406,9 @@ function footprintW(node,MD){
 function thaiTierBonusFrac(tier){
   switch(tier){case 1:return C.THAI_TIER1_R;case 2:return C.THAI_TIER2_R;case 3:return C.THAI_TIER3_R;default:return 0;}
 }
-function siblingGapDelta(ch,prevLastLeafFs){
-  let g=ch.fs*C.SIBLING_GAP_R;
-  if(ch.fs>prevLastLeafFs)g+=ch.fs*C.RISE_PAD_R;
+function siblingGapDelta(ch,prevLastLeafFs,parent){
+  let g=grow(parent,ch.baseFs*C.SIBLING_GAP_R);
+  if(ch.baseFs>prevLastLeafFs)g+=grow(parent,ch.baseFs*C.RISE_PAD_R);
   g+=ch.fs*thaiTierBonusFrac(ch.thaiTier);
   return g;
 }
@@ -397,23 +422,24 @@ function footprintH(node,MD){
   if(node.subtree)return node.subtree.height;
   if(!node.children.length)return node.fs*C.LINE_H+node.textBlock.extraHeight;
   const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1;
-  const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
+  const subGap=familySubGap(node);
   let h=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
   for(let i=0;i<node.children.length;i++){
     const ch=node.children[i];
-    if(i>0)h+=siblingGapDelta(ch,lastLeafFs(node.children[i-1]));
+    if(i>0)h+=siblingGapDelta(ch,node.children[i-1].subtree?.lastLeafBaseFs??lastLeafFs(node.children[i-1]),node);
     h+=footprintH(ch,MD);
   }
   return h;
 }
-function d1ColGap(colA,colB,ARM1){
-  const mxA=colA.length?Math.max(...colA.map(ch=>titleWidth(ch))):0;
-  const mxB=colB.length?Math.max(...colB.map(ch=>titleWidth(ch))):0;
-  return Math.max(ARM1*C.D1_ARM_FLOOR_R,(mxA+mxB)*C.D1_TXT_PAD_R);
+function d1ColGap(colA,colB,ARM1,parent){
+  const mxA=colA.length?Math.max(...colA.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
+  const mxB=colB.length?Math.max(...colB.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
+  return Math.max(ARM1*C.D1_ARM_FLOOR_R,parent?grow(parent,(mxA+mxB)*C.D1_TXT_PAD_R):(mxA+mxB)*C.D1_TXT_PAD_R);
 }
-function d1RowGap(nextNode){return nextNode.fs*C.D1_ROW_GAP_R+nextNode.fs*thaiTierBonusFrac(nextNode.thaiTier);}
+function d1RowGap(nextNode,parent){return (parent?grow(parent,nextNode.baseFs*C.D1_ROW_GAP_R):nextNode.fs*C.D1_ROW_GAP_R)+nextNode.fs*thaiTierBonusFrac(nextNode.thaiTier); }
 function firstRowUpwardBonus(nodes,d1Fs){
   if(!nodes.length)return 0;
+  nodes=nodes.filter(n=>n.kind!=='spacer');if(!nodes.length)return 0;
   const maxTier=Math.max(...nodes.map(n=>n.thaiTier||0));
   if(nodes.some(n=>(n.mapSize??1)!==1))return Math.max(...nodes.map(n=>n.fs*((n.thaiTier||0)===3?C.THAI_TIER3_FIRSTROW_R:thaiTierBonusFrac(n.thaiTier||0))));
   const frac=maxTier===3?C.THAI_TIER3_FIRSTROW_R:thaiTierBonusFrac(maxTier);
@@ -426,11 +452,11 @@ function place(node,y0){
   node.y=y0;
   if(node.children.length){
     const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1;
-    const subGap=node.children[0].fs*C.SUB_GAP_R*sR;
+    const subGap=familySubGap(node);
     let yc=y0+(node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight);
     for(let i=0;i<node.children.length;i++){
       const ch=node.children[i];
-      if(i>0)yc+=siblingGapDelta(ch,lastLeafFs(node.children[i-1]));
+      if(i>0)yc+=siblingGapDelta(ch,node.children[i-1].subtree?.lastLeafBaseFs??lastLeafFs(node.children[i-1]),node);
       yc=place(ch,yc);
     }
     return yc;
@@ -440,8 +466,9 @@ function place(node,y0){
 function annotateNodes(node,MD){
   node.baseFs=fsz(node.depth,MD);node.fs=node.baseFs*(node.mapSize??1);node.fw=fwt(node.depth);node.capFrac=capCFrac(node.fs,node.fw);
   node.textBlock=measureTextBlock(node,MD);
+  node.structuralTitleWidth=node.kind==='spacer'?node.baseFs:node.fs===node.baseFs?node.textBlock.runs[0].width:mW(node.label,node.baseFs,node.fw);
   node.thaiTier=node.kind==='spacer'?0:thaiHeightTier(node.label);node.hasLower=node.kind!=='spacer'&&hasThaiLower(node.label);
-  node.children.forEach(ch=>annotateNodes(ch,MD));
+  node.children.forEach(ch=>annotateNodes(ch,MD));prepareFamily(node,MD);
 }
 // One bottom-up footprint record per node; placement never remeasures descendants.
 function measureSubtree(node,MD,forceVertical=false){
@@ -459,12 +486,12 @@ function measureSubtree(node,MD,forceVertical=false){
       for(let i=0;i<children.length;i++){
         const ch=children[i],record=ch.subtree;
         offsets.push({node:ch,x:cursor-record.minX,y:0});cursor+=record.maxX-record.minX;
-        if(i+1<children.length)cursor+=Math.max(armLen(ch.depth,MD),ch.fs*C.SIBLING_GAP_R);
+        if(i+1<children.length)cursor+=grow(node,Math.max(armLen(ch.depth,MD),ch.baseFs*C.SIBLING_GAP_R));
       }
       const first=offsets[0],last=offsets[offsets.length-1],center=(first.x+titleWidth(first.node)/2+last.x+titleWidth(last.node)/2)/2;
-      const childFs=Math.max(...children.map(ch=>ch.fs)),baseGap=childFs*C.GAP_R*C.D0_D1_GAP_MULT;
+      const childFs=familyUnit(node),baseGap=grow(node,node.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
       let y=node.fs+node.textBlock.extraHeight+baseGap+lowerThaiChildBonus(node,baseGap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,childFs);
-      if(customSize)y=Math.max(y,ownBottom+Math.max(baseGap,lnW(children[0].depth,MD)*3)-Math.min(...children.map(ch=>ch.subtree.minY)));
+      if(customSize)y=Math.max(y,ownBottom+Math.max(baseGap,familyWidth(node,children[0].depth,MD)*3)-Math.min(...children.map(ch=>ch.subtree.minY)));
       for(const offset of offsets){offset.x+=titleWidth(node)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
       // Length limits are opt-in; left overhang alone is not a width limit.
       // Incoming connector clearance is checked by the vertical parent below.
@@ -475,7 +502,7 @@ function measureSubtree(node,MD,forceVertical=false){
       }
     }
     if(!horizontal){
-      const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1,subGap=children[0].fs*C.SUB_GAP_R*sR;
+      const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1,subGap=familySubGap(node);
       let y=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
       const spine=spineOffsetOf(node);
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
@@ -483,13 +510,13 @@ function measureSubtree(node,MD,forceVertical=false){
       // A one-column WRAP also gives first-level children this incoming shaft.
       // Forced rebuilds reuse measured children; each node is built at most twice.
       for(let i=0;i<children.length;i++){
-        const ch=children[i];if(i)y+=siblingGapDelta(ch,children[i-1].subtree.lastLeafFs);
+        const ch=children[i];if(i)y+=siblingGapDelta(ch,children[i-1].subtree.lastLeafBaseFs,node);
         // Centered own paragraphs reserve their left ink without changing title anchors within the block.
         const descriptionInset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
-        if(((node.layoutDepth??node.depth)>0||(!node.synthetic&&(children.length===1||!layoutPreferences.hlimitInf&&layoutPreferences.hlimitN===1)))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+armLen(ch.depth,MD)<=lnW(ch.depth,MD)/2)measureSubtree(ch,MD,true);
+        if(((node.layoutDepth??node.depth)>0||(!node.synthetic&&(children.length===1||!layoutPreferences.hlimitInf&&layoutPreferences.hlimitN===1)))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+familyArm(node,ch.depth,MD)<=(ch.incomingWidth??lnW(ch.depth,MD))/2)measureSubtree(ch,MD,true);
         // Customized footprints clear actual adjacent ink; default arithmetic is unchanged.
         if(customSize)y=i===0?Math.max(y,ownBottom+subGap-ch.subtree.minY):y-Math.min(0,ch.subtree.minY);
-        offsets.push({node:ch,x:spine+armLen(ch.depth,MD)+descriptionInset,y});y+=ch.subtree.height;
+        offsets.push({node:ch,x:spine+familyArm(node,ch.depth,MD)+descriptionInset,y});y+=ch.subtree.height;
       }
       height=Math.max(height,y);
     }
@@ -498,7 +525,7 @@ function measureSubtree(node,MD,forceVertical=false){
   if(customSize){
     const connected=offsets.filter(offset=>offset.node.kind!=='spacer');
     if(connected.length){
-      const half=lnW(connected[0].node.depth,MD)/2;
+      const half=familyWidth(node,connected[0].node.depth,MD)/2;
       if(horizontal){
         for(const offset of connected){
           const center=offset.x+titleWidth(offset.node)/2;
@@ -507,24 +534,24 @@ function measureSubtree(node,MD,forceVertical=false){
       }else{
         const spine=spineOffsetOf(node);
         minX=Math.min(minX,spine-half);
-        maxX=Math.max(maxX,spine+Math.max(...connected.map(offset=>armLen(offset.node.depth,MD)))*.70+half);
+        maxX=Math.max(maxX,spine+Math.max(...connected.map(offset=>familyArm(node,offset.node.depth,MD)))*.70+half);
         for(const offset of connected)height=Math.max(height,offset.y+offset.node.fs*offset.node.capFrac+half);
       }
     }
   }
-  node.subtree={minX,maxX,minY,height,customSize,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
+  node.subtree={minX,maxX,minY,height,customSize,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafBaseFs:children.length?children[children.length-1].subtree.lastLeafBaseFs:node.baseFs,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
 }
 function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
-  const d1Fs=NC?Math.max(...d1.map(ch=>ch.fs)):C.BASE_FONT;
+  const d1Fs=NC?familyUnit(root):C.BASE_FONT;
   const d1TxtW=d1.map(n=>titleWidth(n));
   const d1ColW_s=d1.map((n,i)=>Math.max(colW(n,MD),d1TxtW[i]));
   const cl=[];let xc=C.LEFT_M;
   for(let i=0;i<NC;i++){
     cl.push(xc);
-    const rPad=d1TxtW[i]*C.D1_TXT_PAD_R;
-    const lPad=i+1<NC?d1TxtW[i+1]*C.D1_TXT_PAD_R:0;
+    const rPad=grow(root,structuralTitle(d1[i])*C.D1_TXT_PAD_R);
+    const lPad=i+1<NC?grow(root,structuralTitle(d1[i+1])*C.D1_TXT_PAD_R):0;
     xc+=d1ColW_s[i]+rPad+lPad;
   }
   for(let i=0;i<NC;i++){d1[i].x=cl[i]-(d1[i].subtree?.minX||0);assignSubtreeX(d1[i],MD);}
@@ -533,21 +560,21 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
     NC===1?d1[0].cx:(d1[0].cx+d1[NC-1].cx)/2;
   root.cx=rCX;root.x=rCX-titleWidth(root)/2;
   if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
-  const d1BaseGap=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
+  const d1BaseGap=grow(root,root.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
   let d1Y=root.y+root.fs+root.textBlock.extraHeight+d1BaseGap+lowerThaiChildBonus(root,d1BaseGap)*(NC===1?1:C.LOWER_THAI_FANOUT_FRAC);
   if(root.subtree?.customSize&&d1.length)d1Y=Math.max(d1Y,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap-Math.min(...d1.map(ch=>ch.subtree.minY)));
   const firstRowBonus=firstRowUpwardBonus(d1,d1Fs);
   const bots=[];for(let i=0;i<NC;i++)bots.push(place(d1[i],d1Y+firstRowBonus));
-  const pW=Math.max(NC?cl[NC-1]+d1ColW_s[NC-1]+d1TxtW[NC-1]*C.D1_TXT_PAD_R:0,
+  const pW=Math.max(NC?cl[NC-1]+d1ColW_s[NC-1]+grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R):0,
     root.x+titleWidth(root))+C.RIGHT_M;
   const pH=(bots.length?Math.max(...bots):d1Y+120)+C.BOT_M;
   const av=d1Y-root.y-root.fs-root.textBlock.extraHeight;
-  const rg=Math.min(cgap(d1[0]?.depth||1,MD),av*0.3);
+  const rg=Math.min(familyGap(root,d1[0]?.depth||1,MD),av*0.3);
   const rb=root.y+root.fs+root.textBlock.extraHeight+rg;
   const d1BusY=rb+(d1Y-rb)*C.BUS_MID;
   const sX0=Math.min(root.x,NC?cl[0]:root.x);
   const sX1=Math.max(root.x+titleWidth(root),
-    NC?cl[NC-1]+d1ColW_s[NC-1]+d1TxtW[NC-1]*C.D1_TXT_PAD_R:root.x);
+    NC?cl[NC-1]+d1ColW_s[NC-1]+grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R):root.x);
   return{root,MD,pW,pH,d1Y,d1Mode:'simple',d1Cols:null,d1Groups:null,
     d1ColX:null,d1BusY,d1X0:sX0,d1X1:sX1,firstRowBonus};
 }
@@ -555,8 +582,8 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
   const cols=Math.min(layoutPreferences.hlimitN,NC);
-  const ARM1=armLen(d1[0].depth,MD);
-  const d1Fs=Math.max(...d1.map(ch=>ch.fs));
+  const ARM1=familyArm(root,d1[0].depth,MD);
+  const d1Fs=familyUnit(root);
   const base=Math.floor(NC/cols),extra=NC%cols;
   const colChildren=[];let cidx=0;
   for(let c=0;c<cols;c++){const sz=c<extra?base+1:base;colChildren.push(d1.slice(cidx,cidx+sz));cidx+=sz;}
@@ -566,14 +593,14 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   let xcg=gridX0;
   for(let c=0;c<cols;c++){
     d1ColX.push(xcg);colLabelX.push(xcg+ARM1);
-    xcg+=colWidths[c]+(c+1<cols?d1ColGap(colChildren[c],colChildren[c+1],ARM1):0);
+    xcg+=colWidths[c]+(c+1<cols?d1ColGap(colChildren[c],colChildren[c+1],ARM1,root):0);
   }
   const gridX1=d1ColX[cols-1]+colWidths[cols-1];
-  const d1BaseGap_g=d1Fs*C.GAP_R*C.D0_D1_GAP_MULT;
-  let d1Y_g=root.y+(cols===1&&root.description!==undefined?describedChildrenOffset(root,d1Fs*C.SUB_GAP_R):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
+  const d1BaseGap_g=grow(root,root.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
+  let d1Y_g=root.y+(cols===1&&root.description!==undefined?describedChildrenOffset(root,grow(root,root.family.unit*C.SUB_GAP_R)):root.fs+root.textBlock.extraHeight+d1BaseGap_g+lowerThaiChildBonus(root,d1BaseGap_g)*(cols===1?1:C.LOWER_THAI_FANOUT_FRAC));
   if(root.subtree?.customSize)d1Y_g=Math.max(d1Y_g,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap_g-Math.min(...d1.map(ch=>ch.subtree.minY)));
   const av_g=d1Y_g-root.y-root.fs-root.textBlock.extraHeight;
-  const rg_g=Math.min(cgap(d1[0]?.depth||1,MD),av_g*0.3);
+  const rg_g=Math.min(familyGap(root,d1[0]?.depth||1,MD),av_g*0.3);
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
   const d1BusY=rb_g+(d1Y_g-rb_g)*C.BUS_MID;
   const gridStartY=d1Y_g;
@@ -585,7 +612,7 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
     for(let r=0;r<colChildren[c].length;r++){
       if(r>0&&root.subtree?.customSize)yc-=Math.min(0,colChildren[c][r].subtree.minY);
       colRowY[c][r]=yc;yc+=footprintH(colChildren[c][r],MD);
-      if(r+1<colChildren[c].length)yc+=d1RowGap(colChildren[c][r+1]);
+      if(r+1<colChildren[c].length)yc+=d1RowGap(colChildren[c][r+1],root);
     }
   }
   const d1Groups=[];
@@ -718,13 +745,13 @@ function getConnSegments(lay){
       const children=connected,depth=children[0].depth;
       const bottom=p.y+Math.max(p.textBlock.bottom,p.textBlock.runs[0].baseline+p.textBlock.runs[0].descent);
       const inkTop=ch=>ch.y+ch.textBlock.runs[0].baseline-ch.textBlock.runs[0].ascent;
-      const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(cgap(depth,MD),gap*0.3);
-      const clearance=p.subtree.customSize?lnW(depth,MD)/2+1e-9:0;
-      const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+mW(p.label,p.fs,p.fw)/2,lw=lnW(depth,MD);
+      const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(familyGap(p,depth,MD),gap*0.3);
+      const clearance=p.subtree.customSize?familyWidth(p,depth,MD)/2+1e-9:0;
+      const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+mW(p.label,p.fs,p.fw)/2,lw=familyWidth(p,depth,MD);
       seg(p.col,lw,center,start,center,bus);
       const centers=children.map(ch=>ch.x+titleWidth(ch)/2);
       seg(p.col,lw,centers[0],bus,centers[centers.length-1],bus);
-      children.forEach((ch,i)=>seg(p.col,lw,centers[i],bus,centers[i],inkTop(ch)-Math.max(clearance,Math.min(cgap(depth,MD),(inkTop(ch)-bus)*0.3))));
+      children.forEach((ch,i)=>seg(p.col,lw,centers[i],bus,centers[i],inkTop(ch)-Math.max(clearance,Math.min(familyGap(p,depth,MD),(inkTop(ch)-bus)*0.3))));
       children.forEach(subSegs);return;
     }
     const sx=spineXOf(p);
@@ -732,10 +759,10 @@ function getConnSegments(lay){
     const lastCh=connected[connected.length-1];
     const lmy=lastCh.y+lastCh.fs*lastCh.capFrac;
     const vg=(fc.y-p.y-p.fs-p.textBlock.extraHeight)*C.VG_FRAC;
-    seg(p.col,lnW(p.depth+1,MD),sx,p.y+p.fs+p.textBlock.extraHeight+vg,sx,lmy);
+    seg(p.col,familyWidth(p,p.depth+1,MD),sx,p.y+p.fs+p.textBlock.extraHeight+vg,sx,lmy);
     for(const ch of connected){
       const cy=ch.y+ch.fs*ch.capFrac;
-      seg(p.col,lnW(ch.depth,MD),sx,cy,sx+armLen(ch.depth,MD)*0.70,cy);
+      seg(p.col,familyWidth(p,ch.depth,MD),sx,cy,sx+familyArm(p,ch.depth,MD)*0.70,cy);
     }
     p.children.forEach(subSegs);
   };
@@ -743,15 +770,15 @@ function getConnSegments(lay){
   if(d1Mode==='simple'){
     if(d1.length){
       const by=d1BusY;
-      const d1BaseGap=d1[0].fs*C.GAP_R*C.D0_D1_GAP_MULT;
-      const rg=Math.min(cgap(d1[0].depth,MD),d1BaseGap*0.3);
+      const d1BaseGap=grow(root,root.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
+      const rg=Math.min(familyGap(root,d1[0].depth,MD),d1BaseGap*0.3);
       const rb=by-(d1BaseGap-rg)*C.BUS_MID;
       const upperLen=by-rb;
       let topX=root.cx,snapIdx=-1;
       if(d1.length>=3){
         const _sd=[];
         for(let i=1;i<d1.length-1;i++){
-          const n=d1[i],dg=Math.min(cgap(d1[0].depth,MD),(n.y-by)*0.3);
+          const n=d1[i],dg=Math.min(familyGap(root,d1[0].depth,MD),(n.y-by)*0.3);
           const dist=Math.abs(n.cx-root.cx);
           if(dist<Math.min(upperLen,(n.y-dg)-by))_sd.push({i,dist});
         }
@@ -763,7 +790,7 @@ function getConnSegments(lay){
         }
         if(snapIdx!==-1)topX=(d1[snapIdx].cx+root.cx)/2;
       }
-      const lw1=lnW(d1[0].depth,MD);
+      const lw1=familyWidth(root,d1[0].depth,MD);
       seg(root.col,lw1,topX,rb,topX,by);
       if(d1.length>1)seg(root.col,lw1,d1[0].cx,by,d1[d1.length-1].cx,by);
       for(let i=0;i<d1.length;i++){
@@ -774,7 +801,7 @@ function getConnSegments(lay){
     d1.forEach(subSegs);return segs;
   }
   if(d1.length){
-    const lw1=lnW(d1[0].depth,MD);
+    const lw1=familyWidth(root,d1[0].depth,MD);
     if(d1Cols===1){
       const sx=spineXOf(root);
       const fc=d1[0],lastD1=d1[d1.length-1];
@@ -783,11 +810,11 @@ function getConnSegments(lay){
       seg(root.col,lw1,sx,root.y+root.fs+root.textBlock.extraHeight+vg,sx,lmy);
       for(const ch of d1){
         const ey=ch.y+ch.fs*ch.capFrac;
-        seg(root.col,lw1,sx,ey,ch.x-armLen(ch.depth,MD)*0.30,ey);
+        seg(root.col,lw1,sx,ey,ch.x-familyArm(root,ch.depth,MD)*0.30,ey);
       }
     }else{
-      const d1BaseGap=d1[0].fs*C.GAP_R*C.D0_D1_GAP_MULT;
-      const rg=Math.min(cgap(d1[0].depth,MD),d1BaseGap*0.3);
+      const d1BaseGap=grow(root,root.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
+      const rg=Math.min(familyGap(root,d1[0].depth,MD),d1BaseGap*0.3);
       seg(root.col,lw1,root.cx,d1BusY-(d1BaseGap-rg)*C.BUS_MID,root.cx,d1BusY);
       const activeColumns=d1ColX.filter((_,c)=>d1Groups.some(g=>g.col===c&&g.node.kind!=='spacer'));
       seg(root.col,lw1,Math.min(activeColumns[0],root.cx),d1BusY,Math.max(activeColumns[activeColumns.length-1],root.cx),d1BusY);
@@ -798,7 +825,7 @@ function getConnSegments(lay){
         seg(root.col,lw1,shaftX,d1BusY,shaftX,lastCh.y+lastCh.fs*lastCh.capFrac);
         for(const g of colGs){
           const ch=g.node;
-          seg(root.col,lw1,shaftX,ch.y+ch.fs*ch.capFrac,ch.x-armLen(ch.depth,MD)*0.30,ch.y+ch.fs*ch.capFrac);
+          seg(root.col,lw1,shaftX,ch.y+ch.fs*ch.capFrac,ch.x-familyArm(root,ch.depth,MD)*0.30,ch.y+ch.fs*ch.capFrac);
         }
       }
     }
@@ -1194,7 +1221,7 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
 }
 
 const st={lay:null,scale:1,panX:0,panY:0};
-const gesture={drag:null,mouseZoom:null,t1d:null,touchMoved:false,startX:0,startY:0,lastTapTime:0,lastTapX:0,lastTapY:0,sequence:null,twoTap:null,twoTimer:null,lastTwo:null,suppressMouseUntil:0,suppressAux:false,pointerType:'mouse'};
+const gesture={drag:null,mouseZoom:null,t1d:null,touchMoved:false,startX:0,startY:0,sequence:null,twoTap:null,twoTimer:null,suppressMouseUntil:0,suppressAux:false,pointerType:'mouse'};
 // Same private Safari identity as the shell; modules remain independent.
 const ipadSafari=navigator.maxTouchPoints>1&&(/iPad/i.test(navigator.userAgent)||navigator.platform==='MacIntel'&&/Macintosh/i.test(navigator.userAgent))&&/AppleWebKit/i.test(navigator.userAgent)&&/Version\//i.test(navigator.userAgent)&&/Safari\//i.test(navigator.userAgent)&&!/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium|Android|Edg\/|OPR\//i.test(navigator.userAgent);
 function canvasInteraction(value){if(typeof opts.onCanvasInteraction==='function'){try{const result=opts.onCanvasInteraction(value);if(result&&typeof result.then==='function')Promise.resolve(result).catch(()=>{});}catch(error){/* Host menu failure cannot interrupt the canvas. */}}}
@@ -1239,7 +1266,7 @@ function tapRelease(channel,x,y,inverse=false){
 function canvasActivity(){canvasInteraction({kind:'activity'});}
 function insideCanvas(x,y){const r=canvas.getBoundingClientRect();return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;}
 function clearTwoCandidate(){clearTimeout(gesture.twoTimer);gesture.twoTimer=null;gesture.twoTap=null;}
-function cancelGestures(){clearTap();gesture.drag=null;gesture.mouseZoom=null;gesture.t1d=null;gesture.sequence=null;gesture.lastTapTime=0;gesture.lastTwo=null;clearTwoCandidate();canvas.style.cursor='grab';canvasActivity();}
+function cancelGestures(){clearTap();gesture.drag=null;gesture.mouseZoom=null;gesture.t1d=null;gesture.sequence=null;clearTwoCandidate();canvas.style.cursor='grab';canvasActivity();}
 const kbLift={h:0,targetH:0,animId:null,btnH:0,btnTarget:0,btnAnimId:null};
 const uiState={userTouchedCanvas:false,colorSeed:0};
 let chromeOcclusion=null;
@@ -1541,7 +1568,7 @@ function applyPinch(touches){
   st.panX=m.x-(m.x-st.panX)*(ns/st.scale);st.panY=m.y-(m.y-st.panY)*(ns/st.scale);
   st.scale=ns;gesture.t1d=nd;
 }
-function promotePinch(touches){clearTap();clearTwoCandidate();gesture.lastTwo=null;if(gesture.sequence)gesture.sequence.established=true;applyPinch(touches);}
+function promotePinch(touches){clearTap();clearTwoCandidate();if(gesture.sequence)gesture.sequence.established=true;applyPinch(touches);}
 function trackTwo(touches){
   const tap=gesture.twoTap;if(!tap)return false;
   for(const t of touches){const original=tap.points.get(t.identifier);if(!original)return false;tap.latest.set(t.identifier,{identifier:t.identifier,clientX:t.clientX,clientY:t.clientY});if(Math.hypot(t.clientX-original.clientX,t.clientY-original.clientY)>6)return false;}
@@ -1556,7 +1583,7 @@ listen(canvas,'touchstart',e=>{
     const t=e.touches[0];tapPress('one-touch',t.clientX,t.clientY,40);gesture.sequence={time:now,multi:false,established:false,firstId:t.identifier};
     gesture.drag={sx:t.clientX-st.panX,sy:t.clientY-st.panY};gesture.startX=t.clientX;gesture.startY=t.clientY;gesture.touchMoved=false;gesture.t1d=null;
   }else if(e.touches.length===2){
-    const seq=gesture.sequence;gesture.drag=null;gesture.touchMoved=true;gesture.lastTapTime=0;gesture.t1d=td(e.touches);
+    const seq=gesture.sequence;gesture.drag=null;gesture.touchMoved=true;gesture.t1d=td(e.touches);
     if(seq)seq.multi=true;
     if(ipadSafari&&seq&&!seq.established&&now-seq.time<=100){
       clearTwoCandidate();const points=Array.from(e.touches,t=>({identifier:t.identifier,clientX:t.clientX,clientY:t.clientY}));
@@ -1564,15 +1591,15 @@ listen(canvas,'touchstart',e=>{
       const pairMid=tm(e.touches),rect=canvas.getBoundingClientRect();tapPress('two-touch',pairMid.x+rect.left,pairMid.y+rect.top,40);
       gesture.twoTap={points:new Map(origins.map(t=>[t.identifier,t])),latest:new Map(points.map(t=>[t.identifier,t])),mid:tm(e.touches),distance:td(e.touches),released:new Set()};
       gesture.twoTimer=setTimeout(()=>{gesture.twoTimer=null;if(gesture.twoTap){const touches=[...gesture.twoTap.latest.values()].filter(t=>!gesture.twoTap.released.has(t.identifier));promotePinch(touches);redraw();}},Math.max(0,251-(now-seq.time)));
-    }else{clearTap();clearTwoCandidate();gesture.lastTwo=null;if(seq)seq.established=true;}
-  }else if(e.touches.length>2){clearTap();clearTwoCandidate();gesture.lastTwo=null;gesture.lastTapTime=0;gesture.drag=null;gesture.t1d=null;if(gesture.sequence){gesture.sequence.multi=true;gesture.sequence.established=true;}}
+    }else{clearTap();clearTwoCandidate();if(seq)seq.established=true;}
+  }else if(e.touches.length>2){clearTap();clearTwoCandidate();gesture.drag=null;gesture.t1d=null;if(gesture.sequence){gesture.sequence.multi=true;gesture.sequence.established=true;}}
 },{passive:false});
 listen(canvas,'touchmove',e=>{
   e.preventDefault();if(paused)return;canvasActivity();
   if(gesture.twoTap){if(trackTwo(e.touches)&&performance.now()-gesture.sequence.time<=250)return;promotePinch(e.touches);}
   else if(e.touches.length===1&&gesture.drag&&!gesture.sequence?.multi){
     const dx=e.touches[0].clientX-gesture.startX,dy=e.touches[0].clientY-gesture.startY;
-    if(!gesture.touchMoved&&Math.hypot(dx,dy)>3){gesture.touchMoved=true;clearTap();gesture.sequence.established=true;gesture.lastTwo=null;markTouched();}
+    if(!gesture.touchMoved&&Math.hypot(dx,dy)>3){gesture.touchMoved=true;clearTap();gesture.sequence.established=true;markTouched();}
     st.panX=e.touches[0].clientX-gesture.drag.sx;st.panY=e.touches[0].clientY-gesture.drag.sy;
   }else if(e.touches.length===2&&gesture.t1d!==null)applyPinch(e.touches);
   redraw();
@@ -1583,18 +1610,17 @@ listen(canvas,'touchend',e=>{
   if(gesture.twoTap){
     const valid=trackTwo([...e.touches,...e.changedTouches]),tap=gesture.twoTap;
     for(const t of e.changedTouches)tap.released.add(t.identifier);
-    if(!valid||performance.now()-seq.time>250){clearTap();clearTwoCandidate();gesture.lastTwo=null;}
+    if(!valid||performance.now()-seq.time>250){clearTap();clearTwoCandidate();}
     else if(e.touches.length===0&&tap.released.size===2){
       const mid=tm([...tap.latest.values()]),r=canvas.getBoundingClientRect();tapRelease('two-touch',mid.x+r.left,mid.y+r.top,true);
       clearTwoCandidate();
     }
   }
   if(e.touches.length)return;
-  if(!seq.multi)gesture.lastTwo=null;
   if(!seq.multi&&!gesture.touchMoved&&performance.now()-seq.time<=250&&e.changedTouches.length===1&&Math.hypot(e.changedTouches[0].clientX-gesture.startX,e.changedTouches[0].clientY-gesture.startY)<=3&&insideCanvas(e.changedTouches[0].clientX,e.changedTouches[0].clientY)){
-    const now=performance.now(),t=e.changedTouches[0],tx=t.clientX,ty=t.clientY;
+    const t=e.changedTouches[0],tx=t.clientX,ty=t.clientY;
     tapRelease('one-touch',tx,ty);
-  }else if(!seq.multi){clearTap();gesture.lastTapTime=0;}
+  }else if(!seq.multi){clearTap();}
   gesture.drag=null;gesture.t1d=null;gesture.touchMoved=false;gesture.sequence=null;
 });
 listen(canvas,'touchcancel',cancelGestures);
@@ -1649,8 +1675,8 @@ function setText(text,options={}){
     const parsed=parse(text),stack=parsed?(parsed.synthetic?parsed.children.slice().reverse():[parsed]):[];let index=0;
     while(stack.length){const n=stack.pop(),p=presentation[index];if(p.kind==='spacer'&&(n.children.length||nodeTexts&&nodeTexts[index]!=='')){const error=new TypeError('A spacer must be an empty leaf');reportError(error);throw error;}index++;for(let i=n.children.length-1;i>=0;i--)stack.push(n.children[i]);}
   }
-  if(text===sourceText&&JSON.stringify(presentation)===JSON.stringify(sourcePresentation)&&placeholders.join(',')===sourcePlaceholders.join(',')&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats))return;
   const onlyPresentation=text===sourceText&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats)&&placeholders.join(',')===sourcePlaceholders.join(',');
+  if(onlyPresentation&&JSON.stringify(presentation)===JSON.stringify(sourcePresentation))return;
   if(!onlyPresentation)sourceRevision++;presentationChanged=presentationChanged||onlyPresentation;sourceStats=stats;sourcePresentation=presentation;sourceReady=true;
   sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;
   if(!text.trim())flushRender();else if(onlyPresentation){pendingRender=true;if(!paused&&rtimer===null)rtimer=setTimeout(()=>{rtimer=null;render();},Math.max(0,50-(performance.now()-lastPresentationRender)));}else schedRender();
@@ -1779,5 +1805,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.12.0',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.12.3',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();
