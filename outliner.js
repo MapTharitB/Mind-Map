@@ -1,4 +1,4 @@
-/* Outliner version 1.11.3 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.12.1 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -167,7 +167,7 @@ function parseMapSizeDraft(text){
   text=String(text).trim();if(!/^(?:[0-9]+(?:\.[0-9]{0,2})?|\.[0-9]{1,2})$/.test(text))return null;
   const value=Number(text);return Number.isFinite(value)?normalizeMapSize(value):null;
 }
-function copyPresentation(from,to){delete to.mapSize;delete to.kind;if(from.mapSize!==undefined&&from.mapSize!==1)to.mapSize=mapSizeUnits(from.mapSize)/MAP_SIZE_UNITS;if(from.kind==='spacer')to.kind='spacer';return to;}
+function copyPresentation(from,to){delete to.titleLineCount;if(from.titleLineCount>1)to.titleLineCount=from.titleLineCount;delete to.mapSize;delete to.kind;if(from.mapSize!==undefined&&from.mapSize!==1)to.mapSize=mapSizeUnits(from.mapSize)/MAP_SIZE_UNITS;if(from.kind==='spacer')to.kind='spacer';return to;}
 function canMarkSpacer(node){
   return node.kind!=='spacer'&&!node.children.length&&!node.text.includes('\n')&&/^[\s\u200b]*$/u.test(node.text);
 }
@@ -175,7 +175,7 @@ function clearSpacerKind(node){
   if(node.kind!=='spacer')return false;
   delete node.kind;return true;
 }
-function validPresentation(node){return (node.mapSize===undefined||mapSizeUnits(node.mapSize)!==null)&&(node.kind===undefined||node.kind==='spacer'&&node.text===''&&node.children.length===0);}
+function validPresentation(node){return validTitleLines(node)&&(node.mapSize===undefined||mapSizeUnits(node.mapSize)!==null)&&(node.kind===undefined||node.kind==='spacer'&&node.text===''&&node.titleLineCount===undefined&&node.children.length===0);}
 const originalHeader = String.raw`<!-- OUTLINER (WorkFlowy style outliner) - one self-contained file. READ THIS BEFORE EDITING.
      Every REQUIREMENT comment records something the owner explicitly asked for.
      Every DO NOT comment records something the owner rejected or that caused a real bug.
@@ -220,7 +220,7 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 /* Measuring mode, used only by crumbs(): natural widths, no shrinking, so overflow can be detected. */
 .moa-outliner .crumbs.m a{flex-shrink:0!important;overflow:visible!important;text-overflow:clip!important}.moa-outliner .crumbs a:hover{text-decoration:underline}
 .moa-outliner button.t{font:inherit;font-size:13px;background:var(--btn);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 11px;cursor:pointer}
-.moa-outliner button.t:hover{border-color:var(--accent)}.moa-outliner button.t.p{background:var(--accent);border-color:var(--accent);color:#fff}
+.moa-outliner button.t:hover:not(#ol-moreBtn){border-color:var(--accent)}.moa-outliner button.t.p{background:var(--accent);border-color:var(--accent);color:#fff}
 /* REQUIREMENT (scrollbar): invisible by default; shown only while scrolling or when the pointer is near the right edge (JS toggles .sb), then it fades out.
    The fade (0.18s) and the idle delay (450ms in JS) are deliberately fast: the owner asked for twice as fast as the first version.
    DO NOT switch to ::-webkit-scrollbar rules (Chrome ignores them once scrollbar-color is set) and DO NOT make the scrollbar always visible.
@@ -258,6 +258,8 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .row.drop-in{background:var(--halo);box-shadow:inset 0 0 0 1px var(--accent)}
 .moa-outliner .dots{position:absolute;left:-47px;top:0;width:21px;height:var(--bh);display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:16px;opacity:0}
 .moa-outliner .row:hover .dots,.moa-outliner .dots:focus-visible{opacity:1}
+/* Pointer feedback shares the shell palette; menu state does not change these hit boxes. */
+@media(hover:hover){.moa-outliner #ol-moreBtn:enabled:hover,.moa-outliner .dots:enabled:hover{background:var(--halo);color:var(--ink)}.moa-outliner #ol-moreBtn:enabled:hover{border-color:var(--line)}}
 .moa-outliner .menu{position:fixed;display:none;z-index:20;background:var(--page);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 6px 24px rgba(0,0,0,.25);min-width:170px;overflow-y:auto;overscroll-behavior:contain}
 .moa-outliner .menu.show{display:block}
 .moa-outliner .menu button{display:block;width:100%;text-align:left;font:inherit;font-size:14px;color:var(--ink);background:none;border:0;border-radius:5px;padding:6px 10px;cursor:pointer}
@@ -439,8 +441,8 @@ const template = String.raw`<div class="page">
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
-function encodeNodeText(text, depth) {
-  const lines = text.split('\n'), prefix = '  '.repeat(depth), out = [prefix + '- ' + lines.shift()];
+function encodeNodeText(node, depth, version = 1) {
+  const parts = splitNodeText(node.text, node.titleLineCount), lines = parts.hasDescription ? parts.description.split('\n') : [], prefix = '  '.repeat(depth), out = [prefix + '- ' + (version === 3 ? JSON.stringify(parts.title) : parts.title)];
   if (lines.length) {
     const bodyPrefix = prefix + '  ';
     out.push(bodyPrefix + '[desc]');
@@ -452,15 +454,18 @@ function encodeNodeText(text, depth) {
 function decodeDescriptionOutline(text) {
   // Accept one conventional terminal line ending; no extra trailing content.
   if(/\[\/moa\](?:\r?\n)$/.test(text))text=text.replace(/\r?\n$/, '');
-  const raw = text.replace(/\r\n/g, '\n').split('\n');
+  const v3=/^ *\[moa v=3\](?:\r?\n|$)/.test(text);
+  // In LF v3 documents a description's literal CR remains payload. A CRLF
+  // envelope declares conventional CRLF transport; remove only that added CR.
+  const raw = (v3&&!/^ *\[moa v=3\]\r\n/.test(text)?text:text.replace(/\r\n/g, '\n')).split('\n');
   // Only the first physical line can declare an extended document.
-  const reject = { recognized: false, attempted: /^ *\[\/?moa(?:\s|\])/.test(raw[0] || '') };
-  if (!raw.length || raw.some(line => /\r/.test(line) || /^[ ]*\t/.test(line))) return reject;
+  const reject = { recognized: false, attempted: /^\s*\[\/?moa(?:\s|\])/.test(raw[0] || '') };
+  if (!raw.length || !v3&&raw.some(line => /\r/.test(line))) return reject;
   const common = Math.min(...raw.filter(line => line.length).map(line => line.match(/^ */)[0].length));
   if (!Number.isFinite(common) || common % 2) return reject;
   let lines = raw.map(line => line.slice(common)), extended=false,codecVersion=1;
   const attempted=reject.attempted;
-  if(attempted){if(!['[moa v=1]','[moa v=2]'].includes(lines[0])||lines[lines.length-1]!=='[/moa]')return{...reject,attempted:true};codecVersion=lines[0]==='[moa v=2]'?2:1;extended=true;lines=lines.slice(1,-1);}
+  if(attempted){if(!['[moa v=1]','[moa v=2]','[moa v=3]'].includes(lines[0])||lines[lines.length-1]!=='[/moa]')return{...reject,attempted:true};codecVersion=Number(lines[0].match(/v=([123])/)[1]);extended=true;lines=lines.slice(1,-1);}
   const items = [], stack = [];
   let owner = null, ownerDepth = -1, mayDescribe = false, recognized = extended, mayPresent=false;
   for (let i = 0; i < lines.length; i++) {
@@ -469,6 +474,7 @@ function decodeDescriptionOutline(text) {
       const depth = match[1].length / 2;
       if (!Number.isInteger(depth) || depth > stack.length) return reject;
       owner = { text: match[3], children: [] }; ownerDepth = depth;
+      if(codecVersion===3){try{const title=JSON.parse(match[3]);if(typeof title!=='string')return{...reject,attempted:true};setNodeText(owner,{title,hasDescription:false,description:''});}catch(_){return{...reject,attempted:true};}}
       if (depth === 0) items.push(owner); else stack[depth - 1].children.push(owner);
       stack.length = depth; stack.push(owner); mayDescribe = true; mayPresent=extended; continue;
     }
@@ -497,11 +503,22 @@ function decodeDescriptionOutline(text) {
   return recognized ? { recognized: true, items, extended } : reject;
 }
 
-function splitNodeText(text) {
-  const at = text.indexOf('\n');
-  return at < 0 ? { title: text, description: '', hasDescription: false } : { title: text.slice(0, at), description: text.slice(at + 1), hasDescription: true };
+// A single canonical string; the optional count selects the title/description boundary.
+function validTitleLines(node) {
+  const count=node.titleLineCount;
+  return count===undefined||Number.isSafeInteger(count)&&count>=1&&count<=node.text.split('\n').length;
+}
+function splitNodeText(text, count = 1) {
+  let at=-1;
+  for(let line=0;line<count;line++){at=text.indexOf('\n',at+1);if(at<0)break;}
+  return at<0?{title:text,description:'',hasDescription:false}:{title:text.slice(0,at),description:text.slice(at+1),hasDescription:true};
 }
 function joinNodeText(parts) { return parts.title + (parts.hasDescription ? '\n' + parts.description : ''); }
+function setNodeText(node, parts) {
+  node.text=joinNodeText(parts);const count=parts.title.split('\n').length;
+  if(count>1)node.titleLineCount=count;else delete node.titleLineCount;
+  return node;
+}
 function mount(container, opts = {}) {
 if (!(container instanceof Element)) throw new TypeError('Outliner.mount requires an Element');
 // Owner-approved iPad Safari exception. Identity is best-effort, never a viewport/pointer gate.
@@ -616,12 +633,13 @@ const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus
 let publicationReady = false, publicationQueued = false, changeTimer = null, revision = 0;
 let immediateSnapshot, observedTree, publishedTree;
 const transientToggles = new Map();
-function getSnapshot() {
+function getSnapshot(options = {}) {
   const tree = [], stack = [{ nodes: root.children, into: tree }];
   while (stack.length) {
     const { nodes, into } = stack.pop();
     for (const n of nodes) {
       if (n === phNode && phOwner && phOwner.children.length === 1 && phOwner.children[0] === n && !n.text && !n.children.length) continue;
+      if(n.titleLineCount>1&&options.titleLines!==true)throw new Error('Multiline title compatibility error: request getSnapshot({titleLines:true}) from a node-title-lines capable Outliner.');
       const copy = copyPresentation(n, { id: n.id, text: n.text, open: n.open, children: [] });
       into.push(copy); stack.push({ nodes: n.children, into: copy.children });
     }
@@ -693,7 +711,7 @@ function nodeStates(snapshot) {
   return states;
 }
 function initializePublication() {
-  immediateSnapshot = getSnapshot();
+  immediateSnapshot = getSnapshot({titleLines:true});
   observedTree = publishedTree = JSON.stringify(immediateSnapshot.tree);
   publicationReady = true;
 }
@@ -709,7 +727,7 @@ function schedulePublication() {
   queueMicrotask(() => {
     if (destroyed) return;
     publicationQueued = false;
-    const current = getSnapshot(), data = JSON.stringify(current.tree);
+    const current = getSnapshot({titleLines:true}), data = JSON.stringify(current.tree);
     const before = nodeStates(immediateSnapshot), after = nodeStates(current), changes = [];
     after.forEach((open, id) => { if (before.has(id) && before.get(id) !== open) changes.push({ id, open }); });
     const transientChanges = [];
@@ -772,7 +790,8 @@ function load() {
       while (stack.length) {
         const n = stack.pop();
         if (!n || !Number.isSafeInteger(n.id) || ids.has(n.id) || typeof n.text !== 'string' || typeof n.open !== 'boolean' || !Array.isArray(n.children)) throw new Error('Invalid outline');
-        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined))throw new Error('Invalid outline presentation');
+        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined||n.titleLineCount!==undefined))throw new Error('Invalid outline presentation');
+        if(n.titleLineCount===1)delete n.titleLineCount;
         if(n.mapSize!==undefined)n.mapSize=mapSizeUnits(n.mapSize)/MAP_SIZE_UNITS;if(n.mapSize===1)delete n.mapSize;ids.add(n.id); for (const child of n.children) stack.push(child);
       }
       root = updateUidFromTree(d.root);
@@ -1012,7 +1031,7 @@ const setLevel = (e, lvl) => Object.entries(levelStyle(lvl)).forEach(([k, v]) =>
 
 // Shared row/head editor binding. Canonical offsets never depend on the active field.
 function readEditorRange(n, textarea) {
-  const role = textarea.dataset.role || 'title', offset = role === 'description' ? splitNodeText(n.text).title.length + 1 : 0;
+  const role = textarea.dataset.role || 'title', offset = role === 'description' ? splitNodeText(n.text,n.titleLineCount).title.length + 1 : 0;
   return { text: n.text, value: n.text, start: offset + textarea.selectionStart, end: offset + textarea.selectionEnd,
     selectionStart: offset + textarea.selectionStart, selectionEnd: offset + textarea.selectionEnd, role };
 }
@@ -1028,7 +1047,7 @@ function editorMark(text, start, length) {
   return html + esc(text.slice(cursor, end)) + '\n';
 }
 function refreshNodeEditor(binding) {
-  const { host, title, getNode, head } = binding, n = getNode(), parts = splitNodeText(n.text);
+  const { host, title, getNode, head } = binding, n = getNode(), parts = splitNodeText(n.text,n.titleLineCount);
   if (title.value !== parts.title) title.value = parts.title;
   host.classList.toggle('has-description', parts.hasDescription);
   host.classList.toggle('spacer-editor',n.kind==='spacer');title.placeholder=n.kind==='spacer'?'Spacer':head?'Untitled':'';
@@ -1057,7 +1076,7 @@ function updateBadge(host,n){
   badge.textContent='×'+displayMapSize(n.mapSize??1).replace(/\.?0+$/,'');badge.hidden=(n.mapSize??1)===1;
 }
 function focusEditor(binding, pos) {
-  const n = binding.getNode(), p = pos == null ? n.text.length : Math.max(0, Math.min(pos, n.text.length)), parts = splitNodeText(n.text);
+  const n = binding.getNode(), p = pos == null ? n.text.length : Math.max(0, Math.min(pos, n.text.length)), parts = splitNodeText(n.text,n.titleLineCount);
   const desc = parts.hasDescription && p > parts.title.length, t = desc ? binding.description : binding.title, local = desc ? p - parts.title.length - 1 : p;
   if (!t) return; t.focus(); t.setSelectionRange(local, local);
 }
@@ -1068,7 +1087,7 @@ function bindField(binding, t) {
     const n = binding.getNode(), parts = { title: binding.title.value, description: binding.description ? binding.description.value : '', hasDescription: !!binding.description };
     if (t.dataset.role === 'description') parts.description = t.value; else parts.title = t.value;
     if(n.kind==='spacer'&&(composing||historyComposing))return n;
-    n.text = joinNodeText(parts); if(!composing&&!historyComposing&&n.text!=='')clearSpacerKind(n); if (searching() && !binding.head) sKeep.add(n);
+    setNodeText(n,parts); if(!composing&&!historyComposing&&n.text!=='')clearSpacerKind(n); if (searching() && !binding.head) sKeep.add(n);
     return n;
   };
   listen(t, 'compositionstart', () => { composing = true; soft = false; });
@@ -1089,7 +1108,33 @@ function bindField(binding, t) {
     }
     else enter(n, range);
   };
+  // Native header Undo traverses text transactions; a boundary command uses
+  // the existing outline edge. Align those owners without recording Undo as new typing.
+  const hasBoundary = () => binding.head&&hist.some(edge=>edge?.titleBoundary===binding.getNode().id);
+  const alignHeaderHistory = () => {
+    clearTimeout(tm);tm=null;typingSnapshot=null;
+    const value=snap();let match=-1;
+    for(let i=0;i<hist.length;i++)if(outlineValue(hist[i])===value&&(match<0||Math.abs(i-hi)<Math.abs(match-hi)))match=i;
+    if(match>=0)hi=match;
+    flushSave();schedulePublication();
+  };
+  const saveFieldCommand = () => {save();if(binding.head&&typeof hist[hi]==='string')hist[hi]={outline:hist[hi],titleBoundary:binding.getNode().id};};
+  const boundaryHistory = direction => {
+    if(!binding.head||composing||historyComposing)return false;
+    const id=binding.getNode().id,edge=hist[direction==='undo'?hi:hi+1],current=outlineValue(hist[outlineHistoryIndex()]);
+    if(current!==snap())return false;
+    if(edge?.titleBoundary!==id){
+      // Recreated description fields have no browser transaction to redo. Only
+      // fall back for a title-text-only adjacent outline edge in this command's lineage.
+      if(!hasBoundary()||document.queryCommandEnabled(direction))return false;
+      const adjacent=outlineValue(hist[direction==='undo'?hi-1:hi+1]);if(!adjacent)return false;
+      const shape=value=>JSON.stringify(JSON.parse(value),(key,value)=>value&&value.id===id&&Array.isArray(value.children)?{...value,text:'',titleLineCount:undefined}:value);
+      if(shape(current)!==shape(adjacent))return false;
+    }
+    return historyHost?runHistory(direction):(direction==='undo'?undo():redo(),true);
+  };
   listen(t, 'beforeinput', e => {
+    if(!e.isComposing&&e.cancelable&&(e.inputType==='historyUndo'||e.inputType==='historyRedo')&&boundaryHistory(e.inputType==='historyUndo'?'undo':'redo')){e.preventDefault();return;}
     pendingBreak = null;
     if (composing || e.isComposing || historyComposing || soft || !isBreak(e)) return;
     // Interior description Enter is a native newline, preserving native header Undo.
@@ -1098,9 +1143,11 @@ function bindField(binding, t) {
     else pendingBreak = { value: t.value, start: t.selectionStart, end: t.selectionEnd };
   });
   listen(t, 'input', e => {
+    const nativeHistory=!composing&&!e.isComposing&&!historyComposing&&binding.head&&(e.inputType==='historyUndo'||e.inputType==='historyRedo')&&hasBoundary();
+    if(nativeHistory&&tm)record(typingSnapshot,true);
     const wasSoft = soft; soft = false;
     if (!composing && !e.isComposing && !historyComposing && !wasSoft && isBreak(e)) {
-      const parts = splitNodeText(binding.getNode().text), old = pendingBreak || {
+      const parts = splitNodeText(binding.getNode().text,binding.getNode().titleLineCount), old = pendingBreak || {
         value: t.dataset.role === 'description' ? parts.description : parts.title,
         start: Math.max(0, t.selectionStart - 1),
         end: Math.max(0, (t.dataset.role === 'description' ? parts.description : parts.title).length - (t.value.length - t.selectionStart))
@@ -1112,28 +1159,43 @@ function bindField(binding, t) {
       if (intent.kind !== 'newline') { t.value = old.value; t.setSelectionRange(old.start, old.end); applyBreak(); return; }
     }
     pendingBreak = null;
-    const role = t.dataset.role, local = t.selectionStart, n = writeField();
+    writeField();
     if (composing || e.isComposing || historyComposing) { fit(t); save(true); return; }
-    const hasNewTitleLF = role === 'title' && t.value.includes('\n');
     refreshNodeEditor(binding);
-    if (hasNewTitleLF) focusEditor(binding, wasSoft ? splitNodeText(n.text).title.length + 1 : local);
-    if (binding.head) crumbs(); save(true);
+    if (binding.head) crumbs();
+    if(nativeHistory)alignHeaderHistory();else save(true);
   });
   listen(t, 'keydown', e => {
     if (composing || e.isComposing || e.keyCode === 229 || historyComposing) { soft = false; return; }
-    soft = (e.key === 'Enter' || e.keyCode === 13) && e.shiftKey && !e.ctrlKey && !e.metaKey;
-    const n = binding.getNode(), range = readEditorRange(n, t), parts = splitNodeText(n.text), collapsed = range.start === range.end;
-    if(!binding.head&&e.key==='Enter'&&e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey){e.preventDefault();e.stopPropagation();presentationCommand('spacer',n);return;}
-    if (soft) return; // native insertion, then split only the local editor on input
+    if(binding.head&&(e.ctrlKey||e.metaKey)&&!e.altKey){const key=(e.code||e.key).toLowerCase();if(['keyz','z','keyy','y'].includes(key)&&boundaryHistory(key.endsWith('y')||e.shiftKey?'redo':'undo')){e.preventDefault();return;}}
+    soft = (e.key === 'Enter' || e.keyCode === 13) && !e.altKey && !e.metaKey && (e.shiftKey && !e.ctrlKey || e.ctrlKey && !e.shiftKey && t.dataset.role === 'description');
+    const n = binding.getNode(), range = readEditorRange(n, t), parts = splitNodeText(n.text,n.titleLineCount), collapsed = range.start === range.end;
+    if(!binding.head&&e.key==='Enter'&&e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){e.preventDefault();e.stopPropagation();presentationCommand('spacer',n);return;}
+    if (soft && e.ctrlKey) {
+      e.preventDefault();
+      // Keep the active textarea's native Undo transaction when supported.
+      let inserted=false;try{inserted=document.execCommand('insertText',false,'\n');}catch(_){}
+      if(!inserted){record();t.setRangeText('\n',t.selectionStart,t.selectionEnd,'end');writeField();refreshNodeEditor(binding);saveFieldCommand();}
+      soft=false;return;
+    }
+    if (soft) return; // Native title/description LF; input recomputes the title boundary.
+    if ((e.key === 'Enter' || e.keyCode === 13) && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();record();
+      const tail=parts.title.slice(t.selectionEnd),description=tail+(parts.hasDescription?(tail?'\n':'')+parts.description:'');
+      setNodeText(n,{title:parts.title.slice(0,t.selectionStart),description,hasDescription:true});
+      refreshNodeEditor(binding);focusEditor(binding,splitNodeText(n.text,n.titleLineCount).title.length+1);if(binding.head)crumbs();saveFieldCommand();return;
+    }
+    if ((e.key === 'Enter' || e.keyCode === 13) && (e.altKey || e.shiftKey || e.ctrlKey || e.metaKey)) {e.preventDefault();return;}
     if ((e.key === 'Enter' || e.keyCode === 13) && !e.ctrlKey && !e.metaKey && !e.altKey) {
       if (enterIntent(n, range, binding.head).kind === 'newline') { soft = true; return; }
       e.preventDefault(); applyBreak(); return;
     }
     if (collapsed && ((e.key === 'Backspace' && range.role === 'description' && t.selectionStart === 0) || (e.key === 'Delete' && range.role === 'title' && parts.hasDescription && t.selectionEnd === t.value.length))) {
-      e.preventDefault(); n.text = parts.title + parts.description; refreshNodeEditor(binding); focusEditor(binding, parts.title.length); if (binding.head) crumbs(); save(true); return;
+      e.preventDefault(); setNodeText(n,splitNodeText(parts.title+parts.description,n.titleLineCount)); refreshNodeEditor(binding); focusEditor(binding, parts.title.length); if (binding.head) crumbs(); save(true); return;
     }
-    if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && ((e.key === 'ArrowDown' && range.role === 'title' && parts.hasDescription) || (e.key === 'ArrowUp' && range.role === 'description' && (t.selectionStart === 0 || t.value.lastIndexOf('\n', t.selectionStart - 1) === -1)))) {
-      e.preventDefault(); focusEditor(binding, range.role === 'title' ? parts.title.length + 1 + Math.min(t.selectionStart, parts.description.indexOf('\n') < 0 ? parts.description.length : parts.description.indexOf('\n')) : Math.min(t.selectionStart, parts.title.length)); return;
+    if (!e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && ((e.key === 'ArrowDown' && range.role === 'title' && parts.hasDescription && t.value.indexOf('\n',t.selectionEnd) === -1) || (e.key === 'ArrowUp' && range.role === 'description' && (t.selectionStart === 0 || t.value.lastIndexOf('\n', t.selectionStart - 1) === -1)))) {
+      e.preventDefault();const lastTitleStart=parts.title.lastIndexOf('\n')+1,column=t.selectionStart-(range.role==='title'?lastTitleStart:0);
+      focusEditor(binding, range.role === 'title' ? parts.title.length + 1 + Math.min(column, parts.description.indexOf('\n') < 0 ? parts.description.length : parts.description.indexOf('\n')) : lastTitleStart+Math.min(column,parts.title.length-lastTitleStart)); return;
     }
     if (binding.head) {
       if (e.key === 'Enter' || (e.key === 'ArrowDown' && range.end === n.text.length)) { e.preventDefault(); toFirst(); }
@@ -1210,12 +1272,12 @@ function crumbs() {
       if (h && i >= 1 && i <= h) {
         if (i === 1) {
           c.appendChild(document.createTextNode('›'));
-          const e = el('span', 'ell'); e.textContent = '…'; e.title = path.slice(1, h + 1).map(x => splitNodeText(x.text).title || 'Untitled').join(' › '); c.appendChild(e);
+          const e = el('span', 'ell'); e.textContent = '…'; e.title = path.slice(1, h + 1).map(x => splitNodeText(x.text,x.titleLineCount).title.replace(/\n/g,' ') || 'Untitled').join(' › '); c.appendChild(e);
         }
         return;
       }
       if (i) c.appendChild(document.createTextNode('›'));
-      const a = el('a'); a.textContent = n === root ? 'Home' : (splitNodeText(n.text).title || 'Untitled'); a.title = a.textContent;
+      const a = el('a'); a.textContent = n === root ? 'Home' : (splitNodeText(n.text,n.titleLineCount).title.replace(/\n/g,' ') || 'Untitled'); a.title = a.textContent;
       if (n === zoom) { a.style.color = 'var(--ink)'; a.style.cursor = 'default'; }
       a.onclick = () => navigate(n);
       c.appendChild(a);
@@ -1293,14 +1355,18 @@ function tab(back) {
 // Split the bullet at the caret into a new bullet (or outdent when the bullet is empty). Shared by Enter and the toolbar.
 // Current owner override: split titles into same-level siblings; descriptions keep their own newlines.
 function enterIntent(n, t, head = false) {
-  const parts = splitNodeText(t.value), start = t.selectionStart, end = t.selectionEnd;
-  const text = t.value.slice(0, start) + t.value.slice(end);
-  if (t.role === 'description') return { kind: start < text.length ? 'newline' : head ? 'navigate' : 'insert', text, start };
-  if (head) return { kind: 'navigate', text, start };
+  const original = splitNodeText(t.value,n.titleLineCount), start = t.selectionStart, end = t.selectionEnd;
+  const parts={...original};
+  if(t.role==='description'){const offset=original.title.length+1;parts.description=original.description.slice(0,start-offset)+original.description.slice(end-offset);}
+  else parts.title=original.title.slice(0,start)+original.title.slice(end);
+  const text=joinNodeText(parts);
+  const result=kind=>({kind,text,start,parts});
+  if (t.role === 'description') return result(start < text.length ? 'newline' : head ? 'navigate' : 'insert');
+  if (head) return result('navigate');
   // Explicit spacers insert below; ordinary empty rows keep their existing rules.
-  if (n.kind === 'spacer') return { kind: 'insert', text, start };
-  if (!text && !n.children.length && par.get(n) !== zoom) return { kind: 'outdent', text, start };
-  return { kind: start === 0 || start < parts.title.length - (end - start) ? 'split' : 'insert', text, start };
+  if (n.kind === 'spacer') return result('insert');
+  if (!text && !n.children.length && par.get(n) !== zoom) return result('outdent');
+  return result(start === 0 || start < parts.title.length ? 'split' : 'insert');
 }
 function insertAfterNodeEnd(n,newNode){
   const parent=par.get(n);if(n===root||!parent)return false;
@@ -1309,20 +1375,20 @@ function insertAfterNodeEnd(n,newNode){
   return true;
 }
 function enter(n, t) {
-  const p = par.get(n), intent = enterIntent(n, t), parts = splitNodeText(intent.text);
+  const p = par.get(n), intent = enterIntent(n, t), parts = intent.parts;
   record(); // Commit pending typing before the single structural history step.
-  if (intent.kind === 'outdent') { n.text = intent.text; outdent(n); render(n.id, 0); return; }
+  if (intent.kind === 'outdent') { setNodeText(n,parts); outdent(n); render(n.id, 0); return; }
   if (intent.kind === 'newline') {
-    n.text = intent.text.slice(0, intent.start) + '\n' + intent.text.slice(intent.start); render(n.id, intent.start + 1); return;
+    setNodeText(n,{...parts,description:parts.description.slice(0,intent.start-parts.title.length-1)+'\n'+parts.description.slice(intent.start-parts.title.length-1)}); render(n.id, intent.start + 1); return;
   }
   if (intent.kind === 'split') {
-    const upper = mk(parts.title.slice(0, intent.start));
-    n.text = joinNodeText({ ...parts, title: parts.title.slice(intent.start) });
+    const upper = setNodeText(mk(),{title:parts.title.slice(0,intent.start),hasDescription:false,description:''});
+    setNodeText(n,{...parts,title:parts.title.slice(intent.start)});
     p.children.splice(p.children.indexOf(n), 0, upper);
     if (searching()) { sKeep.add(n); sKeep.add(upper); }
     render(intent.start === 0 ? upper.id : n.id, 0); return;
   }
-  n.text = intent.text; const nn = mk();
+  setNodeText(n,parts); const nn = mk();
   if (searching()) { sKeep.add(n); sKeep.add(nn); }
   insertAfterNodeEnd(n,nn);
   render(nn.id, 0);
@@ -1525,14 +1591,16 @@ function keys(e, n, t) {
     tab(e.shiftKey || e.key === 'ArrowLeft');
     return;
   }
-  if (isEnter && !e.shiftKey && !mod) {
+  if (isEnter && !e.shiftKey && !e.altKey && !mod) {
     e.preventDefault(); enter(n, t); return;
   }
   if (e.key === 'Backspace' && pos === 0 && end === 0) {
     const list = vis(), i = list.indexOf(n), prev = list[i - 1];
     if (!n.children.length && prev) {
       e.preventDefault();
-      const at = prev.text.length; prev.text += n.text;if(prev.text!=='')clearSpacerKind(prev); if (searching()) sKeep.add(prev); rm(n); render(prev.id, at);
+      const at = prev.text.length, left=splitNodeText(prev.text,prev.titleLineCount), right=splitNodeText(n.text,n.titleLineCount);
+      // Preserve canonical concatenation and its first description boundary.
+      setNodeText(prev,left.hasDescription?{...left,description:left.description+n.text}:{title:left.title+right.title,description:right.description,hasDescription:right.hasDescription});if(prev.text!=='')clearSpacerKind(prev); if (searching()) sKeep.add(prev); rm(n); render(prev.id, at);
     } else if (!n.children.length && !prev && p.children.length > 1) {
       e.preventDefault(); const nx = p.children[1]; rm(n); render(nx.id, 0);
     }
@@ -1580,10 +1648,13 @@ function insertItems(items, target, replaceEmpty) {
 }
 listen(document, 'paste', e => {
   if (!ownsEvent(e)) return;
-  if (!e.clipboardData || (e.target && (e.target.id === 'ol-qIn' || e.target.closest('#ol-head')))) return;
+  if (!e.clipboardData || e.target?.id === 'ol-qIn') return;
   const text = e.clipboardData.getData('text/plain'), html = e.clipboardData.getData('text/html');
   if (historyComposing) return;
   const decoded = decodeDescriptionOutline(text);
+  const legacyDocument=/^ *\[moa v=[12]\](?:\r?\n|$)/.test(text);
+  if(decoded.attempted&&!decoded.recognized&&!legacyDocument){e.preventDefault();toast('Invalid or unsupported outline interchange document');return;}
+  if(e.target?.closest('#ol-head')){if(decoded.extended&&!legacyDocument){e.preventDefault();toast('Paste an outline document into an outline row');}return;}
   const instantiate = item => { const n = copyPresentation(item,mk(item.text)); n.children = item.children.map(instantiate); return n; };
   let items = decoded.recognized ? decoded.items.map(instantiate) : !decoded.attempted&&/<li[\s>]/i.test(html) ? parseHtml(html) : [];
   if (!items.length) items = parseOutline(text);
@@ -1604,10 +1675,13 @@ listen(document, 'paste', e => {
 // depth 0 line and its children are indented under it (Node D, then E F G under it). At Home there is no header line, only the top-level bullets.
 // Plain text export: 2-space indent, "- " prefix. With visible = true, children of collapsed bullets are left out.
 function toText(list, visible) {
-  const out = [];let extended=false,codecVersion=1;
-  (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;const encoded=encodeNodeText(n.text,d).split('\n');
-    if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(units>100000||units%100)codecVersion=2;encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+']');}
-    out.push(encoded.join('\n'));w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
+  const entries=[];
+  (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;entries.push({n,d});w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
+  let extended=false,codecVersion=1;
+  for(const {n} of entries){if(n.titleLineCount>1){extended=true;codecVersion=3;}else if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(codecVersion<2&&(units>100000||units%100))codecVersion=2;}}
+  const out=entries.map(({n,d})=>{const encoded=encodeNodeText(n,d,codecVersion).split('\n');
+    if(n.kind==='spacer'||(n.mapSize??1)!==1)encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+']');
+    return encoded.join('\n');});
   return extended?'[moa v='+codecVersion+']\n'+out.join('\n')+'\n[/moa]':out.join('\n');
 }
 const toastEl = container.querySelector('#ol-toast'); let toastT;
@@ -1696,7 +1770,7 @@ listen(document, 'keydown', e => {
     return;
   }
   if (!ownsEvent(e, historyShortcut)) return;
-  if(e.key==='Enter'&&e.ctrlKey&&!e.altKey&&!e.metaKey&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229&&!historyComposing){
+  if(e.key==='Enter'&&e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229&&!historyComposing){
     const native=historyEditable(e.target)||historyEditable(document.activeElement);if(!native&&sel.size===1){const n=[...sel][0];if(par.has(n)){e.preventDefault();presentationCommand('spacer',n);}}return;
   }
   if (historyShortcut) {
@@ -1993,5 +2067,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.11.3', apiVersion: 1, capabilities: ['snapshot-v1', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.12.1', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

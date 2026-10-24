@@ -1,4 +1,4 @@
-/* MindMap 1.12.3 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.14.1 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -13,7 +13,7 @@ function mapSizeUnits(value){
 }
 function mount(container,opts={}){
   if(!(container instanceof Element))throw new TypeError('MindMap.mount requires an Element');
-  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceStats=null,sourcePresentation=null,presentationChanged=false,lastPresentationRender=0,sourceReady=false,rtimer=null,sourceRevision=0;
+  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceTitleLines=null,sourceStats=null,sourcePresentation=null,sourceHasChildren=null,presentationChanged=false,lastPresentationRender=0,sourceReady=false,rtimer=null,sourceRevision=0,layoutSettingsRevision=0;
   const timers=new Set(),frames=new Set(),listeners=[],objectURLs=new Set();
   const hadClass=container.classList.contains('moa-mindmap'),hadCoveredClass=container.classList.contains('map-covered');
   container.classList.add('moa-mindmap');
@@ -50,14 +50,19 @@ function mount(container,opts={}){
   listen(fontLink,'load',()=>loadFonts());
   if(ownsFont)document.head.appendChild(fontLink);
 const layoutTransitions=new WeakMap(),canonicalTexts=new WeakMap(),runSources=new WeakMap();
+// Canonical child presence is independent of collapse, pruning and spacers.
+function realFamily(node,depth){
+  const children=node.children.filter(ch=>ch.kind!=='spacer');
+  return{children,depth,count:children.length,hasLeaf:children.some(ch=>!(ch.canonicalHasChildren??ch.children.some(n=>n.kind!=='spacer')))};
+}
 function createLayoutPreferences(){
 let branchScale=DEFAULT_BRANCH_SCALE;
 let lengthLimitEnabled=false,lengthLimitRatio=1.5;
 let hlimitInf=true,hlimitN=3,d1Max=Infinity,wrapBoundsReady=false;
-let rootEnabled=false,rootCount=3,rootFollowMax=false,visibleRootCount=0,rootOrder='down';
-const rootMaximum=()=>Math.max(1,visibleRootCount-1);
+let rootEnabled=false,rootCount=3,rootFollowMax=false,visibleRootCount=0,completeRootCount=0,rootOrder='down',families=[];
+const rootMaximum=()=>Math.max(1,completeRootCount-1);
 const rootEffective=()=>rootFollowMax?rootMaximum():Math.min(rootCount,rootMaximum());
-let levelsEnabled=false,levelsN=1,siblingLimitEnabled=true,siblingLimitN=3,branchDepthMax=1,branchSiblingMax=1,branchBoundsReady=false,levelsCountChosen=false,siblingCountChosen=false;
+let allowLeaves=true,levelsEnabled=false,levelsN=1,siblingLimitEnabled=true,siblingLimitN=3,branchDepthMax=1,branchSiblingMax=1,branchBoundsReady=false,levelsCountChosen=false,siblingCountChosen=false;
 function hlimitCap(d){return Math.max(1,d-1);}
 function apply(partial){
   if((typeof partial.branchScale==='number'||typeof partial.branchScale==='string'&&partial.branchScale.trim()!=='')&&Number.isFinite(Number(partial.branchScale)))branchScale=clamp(Math.round((Number(partial.branchScale)+Number.EPSILON)*100),MIN_BRANCH_SCALE*100,MAX_BRANCH_SCALE*100)/100;
@@ -80,7 +85,7 @@ function apply(partial){
   }
   const deeper=partial.deeperHorizontal,siblings=partial.siblingLimit;
   const safeCount=(value,min,max,current)=>{const number=Number(value),rounded=Math.round(number);return Number.isFinite(number)&&Number.isSafeInteger(rounded)?clamp(rounded,min,branchBoundsReady?max:Number.MAX_SAFE_INTEGER):current;};
-  if(deeper&&typeof deeper==='object'){if(typeof deeper.enabled==='boolean')levelsEnabled=deeper.enabled;if('levels' in deeper){const next=safeCount(deeper.levels,1,branchDepthMax,levelsN);levelsCountChosen=Number(deeper.levels)!==1;levelsN=next;}}
+  if(deeper&&typeof deeper==='object'){if(typeof deeper.allowLeaves==='boolean')allowLeaves=deeper.allowLeaves;if(typeof deeper.enabled==='boolean')levelsEnabled=deeper.enabled;if('levels' in deeper){const next=safeCount(deeper.levels,1,branchDepthMax,levelsN);levelsCountChosen=Number(deeper.levels)!==1;levelsN=next;}}
   if(siblings&&typeof siblings==='object'){if(typeof siblings.enabled==='boolean')siblingLimitEnabled=siblings.enabled;if('count' in siblings){const next=safeCount(siblings.count,1,branchSiblingMax,siblingLimitN);siblingCountChosen=Number(siblings.count)!==3;siblingLimitN=next;}}
   // Latest owner policy: activating either layout switches the other off.
   // If an API/bootstrap request supplies both true, LEVELS wins deterministically.
@@ -89,7 +94,7 @@ function apply(partial){
 function updateBranchBounds(root,sourceReady,sourceStats){
   if(!sourceReady)return;
   let stats=sourceStats;
-  if(!stats){let depth=0,siblings=0;const walk=(n,d)=>{depth=Math.max(depth,d);siblings=Math.max(siblings,n.children.length);n.children.forEach(ch=>walk(ch,d+1));};if(root)(root.synthetic?root.children:[root]).forEach(n=>walk(n,0));stats={maxDepth:depth,maxSiblings:siblings};}
+  if(!stats){let depth=0,siblings=0;const walk=(n,d)=>{if(n.kind==='spacer')return;depth=Math.max(depth,d);siblings=Math.max(siblings,n.children.filter(ch=>ch.kind!=='spacer').length);n.children.forEach(ch=>walk(ch,d+1));};if(root)(root.synthetic?root.children:[root]).forEach(n=>walk(n,0));stats={maxDepth:depth,maxSiblings:siblings};}
   const nextDepth=Math.max(1,stats.maxDepth),nextSiblings=Math.max(1,stats.maxSiblings);
   const follow=(value,previous,next,min,chosen)=>chosen&&branchBoundsReady&&value===previous&&next>previous?next:clamp(value,min,next);
   levelsN=levelsCountChosen?follow(levelsN,branchDepthMax,nextDepth,1,true):clamp(1,1,nextDepth);siblingLimitN=siblingCountChosen?follow(siblingLimitN,branchSiblingMax,nextSiblings,1,true):clamp(3,1,nextSiblings);
@@ -98,8 +103,10 @@ function updateBranchBounds(root,sourceReady,sourceStats){
 
 function observeRoot(root,sourceReady,sourceStats){
   updateBranchBounds(root,sourceReady,sourceStats);
-  const roots=root.synthetic?root.children:[root];visibleRootCount=roots.length;
-  const nd=Math.max(1,...roots.map(n=>n.children.length));
+  const roots=(root.synthetic?root.children:[root]).filter(n=>n.kind!=='spacer');visibleRootCount=roots.length;
+  completeRootCount=sourceStats?.rootCount??visibleRootCount;
+  families=[];const walk=(n,d)=>{const family=realFamily(n,d+1);if(family.count>=2)families.push({depth:family.depth,count:family.count,hasLeaf:family.hasLeaf});family.children.forEach(ch=>walk(ch,d+1));};roots.forEach(n=>walk(n,0));
+  const nd=Math.max(1,sourceStats?.maxFirstLevel??Math.max(0,...roots.map(n=>realFamily(n,1).count)));
   if(!wrapBoundsReady||nd!==d1Max){
     wrapBoundsReady=true;
     const prevCap=hlimitCap(d1Max);d1Max=nd;
@@ -109,12 +116,17 @@ function observeRoot(root,sourceReady,sourceStats){
   }
 }
 function observeBlank(sourceReady,sourceStats){
-  updateBranchBounds(null,sourceReady,sourceStats);visibleRootCount=0;
-if(d1Max!==1||sourceReady&&!wrapBoundsReady){d1Max=1;if(hlimitN>1)hlimitN=1;}if(sourceReady)wrapBoundsReady=true;
+  updateBranchBounds(null,sourceReady,sourceStats);visibleRootCount=0;completeRootCount=sourceStats?.rootCount??0;families=[];
+const next=Math.max(1,sourceStats?.maxFirstLevel??1);if(d1Max!==next||sourceReady&&!wrapBoundsReady){d1Max=next;if(hlimitN>hlimitCap(next))hlimitN=hlimitCap(next);}if(sourceReady)wrapBoundsReady=true;
 }
-function getSettingBounds(){return{lengthLimit:{min:1,max:10,step:0.1,precision:2,default:1.5},branchScale:{min:MIN_BRANCH_SCALE,max:MAX_BRANCH_SCALE,step:0.1,precision:2,default:DEFAULT_BRANCH_SCALE},rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max)},deeperHorizontal:{min:1,max:branchDepthMax},siblingLimit:{min:1,max:branchSiblingMax}};}
-function getSettings(){return{lengthLimit:{enabled:lengthLimitEnabled,ratio:lengthLimitRatio},branchScale,rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax,order:rootOrder},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
-return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,
+function depthEligible(family){return family.count>=2&&family.depth>=2&&family.depth<=levelsN+1;}
+function leafEligible(family){return depthEligible(family)&&(allowLeaves||!family.hasLeaf);}
+function horizontalFamily(node){const family=realFamily(node,(node.layoutDepth??node.depth)+1);return levelsEnabled&&leafEligible(family)&&(!siblingLimitEnabled||family.count<=siblingLimitN);}
+function getSettingBounds(){
+const deeperAvailable=families.some(f=>f.count>=2&&f.depth>=2),limitsAvailable=levelsEnabled&&families.some(leafEligible);
+return{lengthLimit:{min:1,max:10,step:0.1,precision:2,default:1.5,available:limitsAvailable},branchScale:{min:MIN_BRANCH_SCALE,max:MAX_BRANCH_SCALE,step:0.1,precision:2,default:DEFAULT_BRANCH_SCALE},rootLayout:{min:1,max:rootMaximum(),available:visibleRootCount>=2,effectiveCount:rootEffective()},horizontalLimit:{min:1,max:hlimitCap(d1Max),available:families.some(f=>f.depth===1&&f.count>=2)},deeperHorizontal:{min:1,max:branchDepthMax,available:deeperAvailable,leavesAvailable:levelsEnabled&&families.some(f=>depthEligible(f)&&f.hasLeaf)},siblingLimit:{min:1,max:branchSiblingMax,available:limitsAvailable}};}
+function getSettings(){return{lengthLimit:{enabled:lengthLimitEnabled,ratio:lengthLimitRatio},branchScale,rootLayout:{enabled:rootEnabled,count:rootCount,followMax:rootFollowMax,order:rootOrder},horizontalLimit:{enabled:!hlimitInf,count:hlimitN},deeperHorizontal:{enabled:levelsEnabled,levels:levelsN,allowLeaves},siblingLimit:{enabled:siblingLimitEnabled,count:siblingLimitN}};}
+return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,horizontalFamily,
   get lengthLimitEnabled(){return lengthLimitEnabled;},
   get lengthLimitRatio(){return lengthLimitRatio;},
   get branchScale(){return branchScale;},
@@ -123,10 +135,7 @@ return {apply,observeRoot,observeBlank,getSettings,getSettingBounds,
   get rootEffective(){return rootEffective();},
   get hlimitInf(){return hlimitInf;},
   get hlimitN(){return hlimitN;},
-  get levelsEnabled(){return levelsEnabled;},
-  get levelsN(){return levelsN;},
-  get siblingLimitEnabled(){return siblingLimitEnabled;},
-  get siblingLimitN(){return siblingLimitN;}
+  get levelsEnabled(){return levelsEnabled;}
 };
 }
 const layoutPreferences=createLayoutPreferences();
@@ -144,7 +153,7 @@ const C={
   VG_FRAC:0.85,BASE_LINE:0.6,BASE_GAP:50,
   LEFT_M:80,RIGHT_M:80,TOP_M:60,BOT_M:100,
   BUS_MID:0.4,
-  ARM_K:0.54,
+  ARM_K:0.54,INCOMING_PAD_R:0.30,HORIZONTAL_GAP_MULT:1.75,
   BG:'#F5F4EE',
   FONT:"'Sarabun',system-ui,-apple-system,sans-serif",
   BASELINE_FRAC:   0.82,
@@ -228,7 +237,7 @@ function parse(raw){
     if(!lbl)continue;
     while(stk.length>1&&stk[stk.length-1].ind>=sp)stk.pop();
     const p=stk[stk.length-1].node,n={label:lbl,children:[],depth:p.depth+1};
-    canonicalTexts.set(n,{text:lbl,titleStart:0,titleEnd:lbl.length});
+    canonicalTexts.set(n,{text:lbl,titleStart:0});
     p.children.push(n);stk.push({ind:sp,node:n});
   }
   if(root.children.length===1)return root.children[0];
@@ -298,43 +307,59 @@ function descriptionSize(node,MD){
   // Preserve the original arithmetic at the default scale, including its minimum.
   return (layoutPreferences.branchScale===DEFAULT_BRANCH_SCALE?fsz(node.depth+2,MD):node.baseFs/(C.RATIO*C.RATIO))*(node.mapSize??1);
 }
+// Halve free interline whitespace; measured Thai/Latin ink retains its existing safety gap.
+function textLineAdvance(previous,ink,fs){
+  const occupied=previous.descent+ink.ascent;
+  return occupied+Math.max((fs*C.LINE_H-occupied)*0.5,fs*C.DESC_GAP_R);
+}
 function measureTextBlock(node,MD){
   if(node.kind==='spacer')return{runs:[],width:node.fs,minX:0,maxX:node.fs,bottom:node.fs*C.LINE_H,extraHeight:0};
-  const title=inkMetrics(node.label,node.fs,node.fw),baseline=node.fs*C.BASELINE_FRAC;
-  const runs=[{text:node.label,fs:node.fs,fw:node.fw,x:0,baseline,...title,description:false}];
-  const source=canonicalTexts.get(node);if(source&&source.titleEnd>source.titleStart)runSources.set(runs[0],{start:source.titleStart,end:source.titleEnd});
-  let width=title.width,bottom=node.fs;
+  const source=canonicalTexts.get(node),lines=node.titleLines??[node.label],metrics=lines.map(text=>inkMetrics(text,node.fs,node.fw)),titleWidth=Math.max(...metrics.map(ink=>ink.width));
+  const runs=[];let offset=source?.titleStart??0;
+  for(let i=0;i<lines.length;i++){
+    const text=lines[i],ink=metrics[i],previous=runs[i-1];
+    const baseline=previous?previous.baseline+textLineAdvance(previous,ink,node.fs):node.fs*C.BASELINE_FRAC;
+    const run={text,fs:node.fs,fw:node.fw,x:(titleWidth-ink.width)/2,baseline,...ink,description:false};
+    if(source&&text.length)runSources.set(run,{start:offset,end:offset+text.length});offset+=text.length+1;runs.push(run);
+  }
+  const title=runs[runs.length-1],baseline=title.baseline,titleBottom=node.titleLines?node.fs+baseline-node.fs*C.BASELINE_FRAC:node.fs;
+  let width=titleWidth,bottom=titleBottom;
   if(node.description!==undefined){
     const offsets=[];let offset=source?.descriptionStart??0;
     const fs=descriptionSize(node,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n').flatMap(line=>{const wrapped=wrapDescriptionLine(line,fs);for(const text of wrapped){offsets.push(offset);offset+=text.length;}offset++;return wrapped;});
     let previous=null,index=0;
     for(const text of lines){
       const ink=inkMetrics(text,fs,'normal');
-      const y=previous?previous.baseline+Math.max(fs*C.LINE_H,previous.descent+ink.ascent+gap):Math.max(node.fs,baseline+title.descent)+gap+(title.descent>node.fs*0.02?title.descent*0.5:0)+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
-      const run={text,fs,fw:'normal',x:(title.width-ink.width)/2,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
+      const y=previous?previous.baseline+textLineAdvance(previous,ink,fs):Math.max(titleBottom,baseline+title.descent)+gap+(title.descent>node.fs*0.02?title.descent*0.5:0)+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
+      const run={text,fs,fw:'normal',x:(titleWidth-ink.width)/2,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
     }
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
   }
-  const minX=runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),title.width);
-  return{runs,width:node.description===undefined?width:maxX-minX,minX,maxX,bottom,extraHeight:Math.max(0,bottom-node.fs)};
+  const minX=runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),titleWidth);
+  return{runs,titleWidth,width:node.description===undefined?width:maxX-minX,minX,maxX,bottom,extraHeight:Math.max(0,bottom-node.fs)};
 }
-function attachNodeTexts(root,texts){
+function attachNodeTexts(root,texts,counts){
   if(!texts)return;
   let index=0;
   const walk=n=>{
-    if(!n.synthetic){const text=texts[index++],at=text.indexOf('\n'),title=(at<0?text:text.slice(0,at)).trim();n.label=title||'(Untitled)';n.placeholder=!title;
-      const rawTitle=at<0?text:text.slice(0,at),titleStart=rawTitle.length-rawTitle.trimStart().length;canonicalTexts.set(n,{text,titleStart,titleEnd:titleStart+title.length,...(at>=0?{descriptionStart:at+1}:{})});
+    if(!n.synthetic){const count=counts?.[index]??1,text=texts[index++];let at=-1;for(let i=0;i<count;i++){at=text.indexOf('\n',at+1);if(at<0)break;}
+      const title=count>1?(at<0?text:text.slice(0,at)):(at<0?text:text.slice(0,at)).trim();n.label=count>1?title:title||'(Untitled)';n.placeholder=count===1&&!title;
+      if(count>1)n.titleLines=title.split('\n');
+      const rawTitle=at<0?text:text.slice(0,at),titleStart=count>1?0:rawTitle.length-rawTitle.trimStart().length;canonicalTexts.set(n,{text,titleStart,...(at>=0?{descriptionStart:at+1}:{})});
       if(at>=0)n.description=text.slice(at+1);}
     n.children.forEach(walk);
   };walk(root);
 }
 function attachPresentation(root,values){
-  if(!values)return;let index=0;const walk=n=>{if(!n.synthetic){const p=values[index++];n.mapSize=p.mapSize;n.kind=p.kind;if(n.kind==='spacer'){n.label='';delete n.description;n.placeholder=false;canonicalTexts.delete(n);}}n.children.forEach(walk);};walk(root);
+  if(!values)return;let index=0;const walk=n=>{if(!n.synthetic){const p=values[index++];n.mapSize=p.mapSize;n.kind=p.kind;if(n.kind==='spacer'){n.label='';delete n.description;delete n.titleLines;n.placeholder=false;canonicalTexts.delete(n);}}n.children.forEach(walk);};walk(root);
   // A new spacer root is an occupied slot, never an extra real font/color level.
   if(root.synthetic&&root.children.filter(n=>n.kind!=='spacer').length<=1){root.depth=-1;const shift=n=>{n.depth--;n.children.forEach(shift);};root.children.forEach(shift);}
 }
-const titleWidth=n=>n.kind==='spacer'?n.fs:mW(n.label,n.fs,n.fw);
-const nodeWidth=n=>n.textBlock?n.textBlock.width:titleWidth(n);
+function attachChildPresence(root,values){
+  if(!values)return;let index=0;const walk=n=>{if(!n.synthetic)n.canonicalHasChildren=values[index++];n.children.forEach(walk);};walk(root);
+}
+const titleWidth=n=>n.kind==='spacer'?n.fs:n.textBlock.titleWidth;
+const nodeWidth=n=>n.textBlock.width;
 
 // Descriptions reserve two visual font levels, never real tree depth/statistics.
 function hasDescription(n){return n.description!==undefined||n.children.some(hasDescription);}
@@ -431,10 +456,12 @@ function footprintH(node,MD){
   }
   return h;
 }
+// Scale only computed horizontal separation; vertical and spacer footprints stay independent.
+function horizontalGap(gap){return gap*C.HORIZONTAL_GAP_MULT;}
 function d1ColGap(colA,colB,ARM1,parent){
   const mxA=colA.length?Math.max(...colA.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
   const mxB=colB.length?Math.max(...colB.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
-  return Math.max(ARM1*C.D1_ARM_FLOOR_R,parent?grow(parent,(mxA+mxB)*C.D1_TXT_PAD_R):(mxA+mxB)*C.D1_TXT_PAD_R);
+  return horizontalGap(Math.max(ARM1*C.D1_ARM_FLOOR_R,parent?grow(parent,(mxA+mxB)*C.D1_TXT_PAD_R):(mxA+mxB)*C.D1_TXT_PAD_R));
 }
 function d1RowGap(nextNode,parent){return (parent?grow(parent,nextNode.baseFs*C.D1_ROW_GAP_R):nextNode.fs*C.D1_ROW_GAP_R)+nextNode.fs*thaiTierBonusFrac(nextNode.thaiTier); }
 function firstRowUpwardBonus(nodes,d1Fs){
@@ -466,37 +493,42 @@ function place(node,y0){
 function annotateNodes(node,MD){
   node.baseFs=fsz(node.depth,MD);node.fs=node.baseFs*(node.mapSize??1);node.fw=fwt(node.depth);node.capFrac=capCFrac(node.fs,node.fw);
   node.textBlock=measureTextBlock(node,MD);
-  node.structuralTitleWidth=node.kind==='spacer'?node.baseFs:node.fs===node.baseFs?node.textBlock.runs[0].width:mW(node.label,node.baseFs,node.fw);
+  node.structuralTitleWidth=node.kind==='spacer'?node.baseFs:node.fs===node.baseFs?node.textBlock.titleWidth:Math.max(...(node.titleLines??[node.label]).map(text=>mW(text,node.baseFs,node.fw)));
   node.thaiTier=node.kind==='spacer'?0:thaiHeightTier(node.label);node.hasLower=node.kind!=='spacer'&&hasThaiLower(node.label);
   node.children.forEach(ch=>annotateNodes(ch,MD));prepareFamily(node,MD);
 }
 // One bottom-up footprint record per node; placement never remeasures descendants.
-function measureSubtree(node,MD,forceVertical=false){
-  if(!forceVertical)node.children.forEach(ch=>measureSubtree(ch,MD));
-  let minX=node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
+function measureSubtree(node,MD,nominal=false){
+  node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
+  let minX=nominal?0:node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=nominal?nodeWidth(node):node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
-  const customSize=(node.mapSize??1)!==1||children.some(ch=>ch.subtree.customSize);
+  const customSize=(node.mapSize??1)!==1||children.some(ch=>ch.kind!=='spacer'&&ch.subtree.customSize);
   const ownTop=Math.min(0,...node.textBlock.runs.map(run=>run.baseline-run.ascent));
   const ownBottom=Math.max(node.textBlock.bottom,...node.textBlock.runs.map(run=>run.baseline+run.descent));
   let minY=ownTop;
-  let horizontal=!forceVertical&&layoutPreferences.levelsEnabled&&children.length>=2&&children.some(ch=>ch.children.length)&&children[0].layoutDepth>=2&&children[0].layoutDepth<=layoutPreferences.levelsN+1&&(!layoutPreferences.siblingLimitEnabled||children.length<=layoutPreferences.siblingLimitN);
+  let horizontal=layoutPreferences.horizontalFamily(node);
   if(children.length){
     if(horizontal){
-      let cursor=0;
+      let cursor=0,remaining=node.family.count;
       for(let i=0;i<children.length;i++){
         const ch=children[i],record=ch.subtree;
         offsets.push({node:ch,x:cursor-record.minX,y:0});cursor+=record.maxX-record.minX;
-        if(i+1<children.length)cursor+=grow(node,Math.max(armLen(ch.depth,MD),ch.baseFs*C.SIBLING_GAP_R));
+        if(ch.kind!=='spacer')remaining--;
+        if(i+1<children.length){
+          const gap=grow(node,Math.max(armLen(ch.depth,MD),ch.baseFs*C.SIBLING_GAP_R));
+          cursor+=ch.kind!=='spacer'&&remaining>0?horizontalGap(gap):gap;
+        }
       }
       const first=offsets[0],last=offsets[offsets.length-1],center=(first.x+titleWidth(first.node)/2+last.x+titleWidth(last.node)/2)/2;
       const childFs=familyUnit(node),baseGap=grow(node,node.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
       let y=node.fs+node.textBlock.extraHeight+baseGap+lowerThaiChildBonus(node,baseGap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,childFs);
       if(customSize)y=Math.max(y,ownBottom+Math.max(baseGap,familyWidth(node,children[0].depth,MD)*3)-Math.min(...children.map(ch=>ch.subtree.minY)));
-      for(const offset of offsets){offset.x+=titleWidth(node)/2-center;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
+      const centerOffset=titleWidth(node)/2-center;
+      for(const offset of offsets){offset.x+=centerOffset;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
       // Length limits are opt-in; left overhang alone is not a width limit.
       // Incoming connector clearance is checked by the vertical parent below.
       if(layoutPreferences.lengthLimitEnabled){
-        const span=cursor,title=node.textBlock.runs[0],titleWidth=Math.max(title.width,title.right)-Math.min(0,-title.left),threshold=titleWidth*layoutPreferences.lengthLimitRatio;
+        const span=cursor,titles=node.textBlock.runs.filter(run=>!run.description),titleWidth=Math.max(...titles.map(run=>run.x+Math.max(run.width,run.right)))-Math.min(0,...titles.map(run=>run.x-run.left)),threshold=titleWidth*layoutPreferences.lengthLimitRatio;
         const tolerance=1e-9*Math.max(1,span,threshold);
         if(!Number.isFinite(span)||!Number.isFinite(threshold)||titleWidth<=0||span>threshold+tolerance){horizontal=false;offsets.length=0;height=node.fs*C.LINE_H+node.textBlock.extraHeight;}
       }
@@ -513,10 +545,11 @@ function measureSubtree(node,MD,forceVertical=false){
         const ch=children[i];if(i)y+=siblingGapDelta(ch,children[i-1].subtree.lastLeafBaseFs,node);
         // Centered own paragraphs reserve their left ink without changing title anchors within the block.
         const descriptionInset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
-        if(((node.layoutDepth??node.depth)>0||(!node.synthetic&&(children.length===1||!layoutPreferences.hlimitInf&&layoutPreferences.hlimitN===1)))&&ch.subtree.childMode==='horizontal'&&ch.subtree.minX+descriptionInset+familyArm(node,ch.depth,MD)<=(ch.incomingWidth??lnW(ch.depth,MD))/2)measureSubtree(ch,MD,true);
+        // Supersedes forced vertical rebuilding: one local offset keeps eligible descendants horizontal.
+        const clearance=incomingClearance(node,ch,MD,descriptionInset);
         // Customized footprints clear actual adjacent ink; default arithmetic is unchanged.
         if(customSize)y=i===0?Math.max(y,ownBottom+subGap-ch.subtree.minY):y-Math.min(0,ch.subtree.minY);
-        offsets.push({node:ch,x:spine+familyArm(node,ch.depth,MD)+descriptionInset,y});y+=ch.subtree.height;
+        offsets.push({node:ch,x:spine+familyArm(node,ch.depth,MD)+descriptionInset+clearance,y,clearance});y+=ch.subtree.height;
       }
       height=Math.max(height,y);
     }
@@ -539,7 +572,29 @@ function measureSubtree(node,MD,forceVertical=false){
       }
     }
   }
-  node.subtree={minX,maxX,minY,height,customSize,childMode:horizontal?'horizontal':'vertical',connectorFallback:forceVertical,childOffsets:offsets,lastLeafBaseFs:children.length?children[children.length-1].subtree.lastLeafBaseFs:node.baseFs,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
+  node.subtree={minX,maxX,minY,height,customSize,hasHorizontalRow:horizontal&&node.family.count>1||children.some(ch=>ch.subtree.hasHorizontalRow),childMode:horizontal?'horizontal':'vertical',childOffsets:offsets,lastLeafBaseFs:children.length?children[children.length-1].subtree.lastLeafBaseFs:node.baseFs,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
+}
+function packingUnits(nodes){
+  const units=[],leading=[];
+  for(const node of nodes){if(node.kind==='spacer'){(units.length?units[units.length-1].after:leading).push(node);}else units.push({node,before:units.length?[]:leading,after:[]});}
+  return units;
+}
+// For a finite incoming shaft, inspect only ink at or above its painted endpoint.
+function leftAbove(node,ceiling){
+  let left=Infinity;
+  for(const run of node.textBlock.runs)if(run.baseline-run.ascent<=ceiling)left=Math.min(left,run.x-run.left);
+  for(const offset of node.subtree.childOffsets)if(offset.y+offset.node.subtree.minY<=ceiling)left=Math.min(left,offset.x+leftAbove(offset.node,ceiling-offset.y));
+  return left;
+}
+function incomingClearance(parent,child,MD,inset=0){
+  if(child.kind==='spacer'||!child.subtree)return 0;
+  const count=parent.family.count,root=(parent.layoutDepth??parent.depth)===0&&!parent.synthetic;
+  if(root&&count>1&&(layoutPreferences.hlimitInf||count<=layoutPreferences.hlimitN))return 0;
+  const half=(child.incomingWidth??lnW(child.depth,MD))/2;
+  const left=root&&count===1?leftAbove(child,child.fs*child.capFrac+half):child.subtree.minX;
+  const arm=familyArm(parent,child.depth,MD);
+  const padding=arm*C.INCOMING_PAD_R;
+  return Math.max(0,half+(child.subtree.hasHorizontalRow?horizontalGap(padding):padding)-(arm+inset+left));
 }
 function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
@@ -547,12 +602,14 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1Fs=NC?familyUnit(root):C.BASE_FONT;
   const d1TxtW=d1.map(n=>titleWidth(n));
   const d1ColW_s=d1.map((n,i)=>Math.max(colW(n,MD),d1TxtW[i]));
+  const units=packingUnits(d1),nextReal=new Map(units.map((u,i)=>[u.node,units[i+1]?.node]));
   const cl=[];let xc=C.LEFT_M;
   for(let i=0;i<NC;i++){
     cl.push(xc);
-    const rPad=grow(root,structuralTitle(d1[i])*C.D1_TXT_PAD_R);
-    const lPad=i+1<NC?grow(root,structuralTitle(d1[i+1])*C.D1_TXT_PAD_R):0;
-    xc+=d1ColW_s[i]+rPad+lPad;
+    if(d1[i].kind==='spacer'){xc+=d1ColW_s[i];continue;}
+    const rPad=grow(root,structuralTitle(d1[i])*C.D1_TXT_PAD_R),next=nextReal.get(d1[i]);
+    const lPad=next?grow(root,structuralTitle(next)*C.D1_TXT_PAD_R):0;
+    xc+=d1ColW_s[i]+(next?horizontalGap(rPad+lPad):rPad+lPad);
   }
   for(let i=0;i<NC;i++){d1[i].x=cl[i]-(d1[i].subtree?.minX||0);assignSubtreeX(d1[i],MD);}
   for(let i=0;i<NC;i++)d1[i].cx=d1[i].x+d1TxtW[i]/2;
@@ -565,7 +622,7 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
   if(root.subtree?.customSize&&d1.length)d1Y=Math.max(d1Y,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap-Math.min(...d1.map(ch=>ch.subtree.minY)));
   const firstRowBonus=firstRowUpwardBonus(d1,d1Fs);
   const bots=[];for(let i=0;i<NC;i++)bots.push(place(d1[i],d1Y+firstRowBonus));
-  const pW=Math.max(NC?cl[NC-1]+d1ColW_s[NC-1]+grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R):0,
+  const pW=Math.max(NC?cl[NC-1]+d1ColW_s[NC-1]+(d1[NC-1].kind==='spacer'?0:grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R)):0,
     root.x+titleWidth(root))+C.RIGHT_M;
   const pH=(bots.length?Math.max(...bots):d1Y+120)+C.BOT_M;
   const av=d1Y-root.y-root.fs-root.textBlock.extraHeight;
@@ -574,20 +631,30 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1BusY=rb+(d1Y-rb)*C.BUS_MID;
   const sX0=Math.min(root.x,NC?cl[0]:root.x);
   const sX1=Math.max(root.x+titleWidth(root),
-    NC?cl[NC-1]+d1ColW_s[NC-1]+grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R):root.x);
+    NC?cl[NC-1]+d1ColW_s[NC-1]+(d1[NC-1].kind==='spacer'?0:grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R)):root.x);
   return{root,MD,pW,pH,d1Y,d1Mode:'simple',d1Cols:null,d1Groups:null,
     d1ColX:null,d1BusY,d1X0:sX0,d1X1:sX1,firstRowBonus};
 }
 function layoutGrid(root,MD,colorSeed,recolor=true){
-  const d1=root.children,NC=d1.length;
+  const d1=root.children,units=packingUnits(d1),NC=units.length;
   root.y=C.TOP_M;
   const cols=Math.min(layoutPreferences.hlimitN,NC);
   const ARM1=familyArm(root,d1[0].depth,MD);
   const d1Fs=familyUnit(root);
   const base=Math.floor(NC/cols),extra=NC%cols;
   const colChildren=[];let cidx=0;
-  for(let c=0;c<cols;c++){const sz=c<extra?base+1:base;colChildren.push(d1.slice(cidx,cidx+sz));cidx+=sz;}
-  const colWidths=colChildren.map(chs=>ARM1+(chs.length?Math.max(...chs.map(ch=>footprintW(ch,MD))):0));
+  for(let c=0;c<cols;c++){const sz=c<extra?base+1:base;colChildren.push(units.slice(cidx,cidx+sz).flatMap(u=>[...u.before,u.node,...u.after]));cidx+=sz;}
+  const placements=new Map(root.subtree?.childOffsets.map(offset=>[offset.node,offset])??[]);
+  const childX=ch=>{
+    const clearance=placements.get(ch)?.clearance??0;
+    if(!clearance)return -(ch.subtree?.minX||0);
+    const inset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
+    return inset+clearance;
+  };
+  const colWidths=colChildren.map(chs=>ARM1+Math.max(...chs.map(ch=>{
+    const width=footprintW(ch,MD);
+    return Math.max(width,ch.kind==='spacer'?0:childX(ch)+(ch.subtree?.maxX??width));
+  })));
   const gridX0=C.LEFT_M;
   const d1ColX=[],colLabelX=[];
   let xcg=gridX0;
@@ -604,22 +671,23 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
   const d1BusY=rb_g+(d1Y_g-rb_g)*C.BUS_MID;
   const gridStartY=d1Y_g;
-  const firstRowNodes=colChildren.map(chs=>chs[0]).filter(Boolean);
+  const firstRowNodes=colChildren.map(chs=>chs.find(ch=>ch.kind!=='spacer')).filter(Boolean);
   const firstRowBonus=cols>1?firstRowUpwardBonus(firstRowNodes,d1Fs):0;
   const colRowY=[];
   for(let c=0;c<cols;c++){
-    let yc=gridStartY+firstRowBonus;colRowY[c]=[];
+    let yc=gridStartY+firstRowBonus,hasReal=false;colRowY[c]=[];
     for(let r=0;r<colChildren[c].length;r++){
+      const real=colChildren[c][r].kind!=='spacer';if(real&&hasReal)yc+=d1RowGap(colChildren[c][r],root);
       if(r>0&&root.subtree?.customSize)yc-=Math.min(0,colChildren[c][r].subtree.minY);
       colRowY[c][r]=yc;yc+=footprintH(colChildren[c][r],MD);
-      if(r+1<colChildren[c].length)yc+=d1RowGap(colChildren[c][r+1],root);
+      if(real)hasReal=true;
     }
   }
   const d1Groups=[];
   for(let c=0;c<cols;c++){
     for(let r=0;r<colChildren[c].length;r++){
       const ch=colChildren[c][r];
-      ch.x=colLabelX[c]-(ch.subtree?.minX||0);assignSubtreeX(ch,MD);place(ch,colRowY[c][r]);
+      ch.x=colLabelX[c]+(ch.kind==='spacer'?0:childX(ch));assignSubtreeX(ch,MD);place(ch,colRowY[c][r]);
       ch.cx=ch.x+titleWidth(ch)/2;
       d1Groups.push({node:ch,col:c,row:r,cellX:d1ColX[c],cellY:colRowY[c][r],
         labelX:colLabelX[c],cellW:colWidths[c],cellH:footprintH(ch,MD)});
@@ -644,10 +712,10 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
     d1Mode:'grid',d1Cols:cols,d1Groups,d1ColX,d1BusY,d1X0:gridX0,d1X1:gridX1,firstRowBonus};
 }
 function layoutTree(root,MD,colorSeed,recolor=true){
-  const NC=root.children.length;
+  const NC=root.children.filter(ch=>ch.kind!=='spacer').length;
   // A lone real root child always uses the existing left-side vertical connector.
   if(NC===1&&!root.synthetic)return layoutGrid(root,MD,colorSeed,recolor);
-  return(layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed,recolor):layoutGrid(root,MD,colorSeed,recolor);
+  return(!NC||layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed,recolor):layoutGrid(root,MD,colorSeed,recolor);
 }
 function translateLayout(lay,dx,dy){
   const walk=n=>{n.x+=dx;n.y+=dy;if(n.cx!=null)n.cx+=dx;n.children.forEach(walk);};walk(lay.root);
@@ -660,41 +728,50 @@ function layout(root,colorSeed){
   const roots=root.synthetic?root.children:[root],logical=(n,d)=>{n.layoutDepth=d;n.children.forEach(ch=>logical(ch,d+1));};
   roots.forEach(n=>logical(n,0));
   const MD=visualMaxD(root);annotateNodes(root,MD);
-  const described=hasDescription(root),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1);if(layoutPreferences.levelsEnabled||described||presented)roots.forEach(n=>measureSubtree(n,MD));
+  const described=hasDescription(root),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1);
+  // Spacer-only footprints retain the original nominal widths of unaffected real branches.
+  if(layoutPreferences.levelsEnabled||described||presented){const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);roots.forEach(n=>measureSubtree(n,MD,nominal));}
   if(!root.synthetic)return layoutTree(root,MD,colorSeed);
   // Color once in original whole-map order; outer packing only translates complete trees.
   root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
   const trees=roots.map(n=>{const lay=layoutTree(n,MD,colorSeed,false);lay.hasDescriptions=hasDescription(n);return lay;});
-  const boxes=trees.map(contentBounds),cols=layoutPreferences.rootEnabled?Math.min(layoutPreferences.rootEffective,trees.length):trees.length;
-  if(layoutPreferences.rootEnabled&&layoutPreferences.rootOrder==='across'){
-    // Placement indexes leave canonical preorder, color traversal and PDF order intact.
-    const rows=Array.from({length:Math.ceil(trees.length/cols)},(_,r)=>Array.from({length:Math.min(cols,trees.length-r*cols)},(_,c)=>r*cols+c));
-    const widths=Array.from({length:cols},(_,c)=>Math.max(...rows.filter(row=>c<row.length).map(row=>boxes[row[c]].w)));
-    const xs=[C.LEFT_M];
-    for(let c=1;c<cols;c++){
-      const gap=Math.max(...rows.filter(row=>c<row.length).map(row=>d1ColGap([trees[row[c-1]].root],[trees[row[c]].root],armLen(trees[row[c]].root.depth,MD))));
-      xs[c]=xs[c-1]+widths[c-1]+gap;
-    }
-    const gridWidth=xs[cols-1]+widths[cols-1]-C.LEFT_M;
-    let y=C.TOP_M;
-    rows.forEach((row,r)=>{
-      const left=xs[0]+(widths[0]-boxes[row[0]].w)/2,last=row.length-1;
-      const right=xs[last]+(widths[last]+boxes[row[last]].w)/2;
-      const shift=row.length<cols?C.LEFT_M+gridWidth/2-(left+right)/2:0;
-      for(const [c,i]of row.entries())translateLayout(trees[i],xs[c]+(widths[c]-boxes[i].w)/2+shift-boxes[i].x,y-boxes[i].y);
-      y+=Math.max(...row.map(i=>boxes[i].h));
-      if(r+1<rows.length)y+=Math.max(...rows[r+1].map(i=>d1RowGap(trees[i].root)));
+  const boxes=trees.map(contentBounds),indexes=new Map(roots.map((n,i)=>[n,i])),units=packingUnits(roots);
+  if(!units.length){let y=C.TOP_M;trees.forEach((lay,i)=>{translateLayout(lay,C.LEFT_M-boxes[i].x,y-boxes[i].y);y+=boxes[i].h;});}
+  else{
+    const cols=layoutPreferences.rootEnabled?Math.min(layoutPreferences.rootEffective,units.length):units.length;
+    const across=layoutPreferences.rootEnabled&&layoutPreferences.rootOrder==='across';
+    const cells=units.map(u=>{
+      const items=[...u.before,u.node,...u.after].map(n=>indexes.get(n));
+      return{items,w:across?items.reduce((v,i)=>v+boxes[i].w,0):Math.max(...items.map(i=>boxes[i].w)),h:across?Math.max(...items.map(i=>boxes[i].h)):items.reduce((v,i)=>v+boxes[i].h,0)};
     });
-  }else{
-    const base=Math.floor(trees.length/cols),extra=trees.length%cols;
-    let index=0,x=C.LEFT_M;
-    for(let c=0;c<cols;c++){
-      const size=base+(c<extra?1:0),end=index+size,width=Math.max(...boxes.slice(index,end).map(box=>box.w));let y=C.TOP_M;
-      for(;index<end;index++){
-        const lay=trees[index],box=boxes[index];translateLayout(lay,x+(width-box.w)/2-box.x,y-box.y);y+=box.h;
-        if(index+1<end)y+=d1RowGap(trees[index+1].root);
+    const placeCell=(cell,x,y)=>{for(const i of cell.items){const box=boxes[i];translateLayout(trees[i],x+(across?0:(cell.w-box.w)/2)-box.x,y-box.y);if(across)x+=box.w;else y+=box.h;}};
+    if(across){
+      // Placement indexes leave canonical preorder, color traversal and PDF order intact.
+      const rows=Array.from({length:Math.ceil(units.length/cols)},(_,r)=>Array.from({length:Math.min(cols,units.length-r*cols)},(_,c)=>r*cols+c));
+      const widths=Array.from({length:cols},(_,c)=>Math.max(...rows.filter(row=>c<row.length).map(row=>cells[row[c]].w)));
+      const xs=[C.LEFT_M];
+      for(let c=1;c<cols;c++){
+        const gap=Math.max(...rows.filter(row=>c<row.length).map(row=>d1ColGap([units[row[c-1]].node],[units[row[c]].node],armLen(units[row[c]].node.depth,MD))));
+        xs[c]=xs[c-1]+widths[c-1]+gap;
       }
-      if(c+1<cols)x+=width+d1ColGap([trees[end-1].root],[trees[end].root],armLen(trees[end].root.depth,MD));
+      const gridWidth=xs[cols-1]+widths[cols-1]-C.LEFT_M;
+      let y=C.TOP_M;
+      rows.forEach((row,r)=>{
+        const left=xs[0]+(widths[0]-cells[row[0]].w)/2,last=row.length-1;
+        const right=xs[last]+(widths[last]+cells[row[last]].w)/2;
+        const shift=row.length<cols?C.LEFT_M+gridWidth/2-(left+right)/2:0;
+        for(const [c,i]of row.entries())placeCell(cells[i],xs[c]+(widths[c]-cells[i].w)/2+shift,y);
+        y+=Math.max(...row.map(i=>cells[i].h));
+        if(r+1<rows.length)y+=Math.max(...rows[r+1].map(i=>d1RowGap(units[i].node)));
+      });
+    }else{
+      const base=Math.floor(units.length/cols),extra=units.length%cols;
+      let index=0,x=C.LEFT_M;
+      for(let c=0;c<cols;c++){
+        const size=base+(c<extra?1:0),end=index+size,width=Math.max(...cells.slice(index,end).map(cell=>cell.w));let y=C.TOP_M;
+        for(;index<end;index++){const cell=cells[index];placeCell(cell,x+(width-cell.w)/2,y);y+=cell.h;if(index+1<end)y+=d1RowGap(units[index+1].node);}
+        if(c+1<cols)x+=width+d1ColGap([units[end-1].node],[units[end].node],armLen(units[end].node.depth,MD));
+      }
     }
   }
   const lay={root,MD,trees,hasDescriptions:described,d1Mode:'forest'};const box=contentBounds(lay);
@@ -717,7 +794,7 @@ function contentBounds(lay){
     const ny1=baselineY+(m.actualBoundingBoxDescent??safeFs*0.20)*scaleRatio;
     const nx1=n.x+titleWidth(n);
     if(!n.synthetic){if(n.x<x0)x0=n.x;if(ny0<y0)y0=ny0;if(nx1>x1)x1=nx1;if(ny1>y1)y1=ny1;}
-    if(!n.synthetic&&(n.description!==undefined||layoutPreferences.levelsEnabled||(n.mapSize??1)!==1)){
+    if(!n.synthetic&&(n.description!==undefined||n.titleLines||layoutPreferences.levelsEnabled||(n.mapSize??1)!==1)){
       for(const run of n.textBlock.runs){
         x0=Math.min(x0,n.x+run.x-run.left);x1=Math.max(x1,n.x+run.x+Math.max(run.width,run.right));
         y0=Math.min(y0,n.y+run.baseline-run.ascent);y1=Math.max(y1,n.y+run.baseline+run.descent);
@@ -747,7 +824,7 @@ function getConnSegments(lay){
       const inkTop=ch=>ch.y+ch.textBlock.runs[0].baseline-ch.textBlock.runs[0].ascent;
       const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(familyGap(p,depth,MD),gap*0.3);
       const clearance=p.subtree.customSize?familyWidth(p,depth,MD)/2+1e-9:0;
-      const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+mW(p.label,p.fs,p.fw)/2,lw=familyWidth(p,depth,MD);
+      const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+titleWidth(p)/2,lw=familyWidth(p,depth,MD);
       seg(p.col,lw,center,start,center,bus);
       const centers=children.map(ch=>ch.x+titleWidth(ch)/2);
       seg(p.col,lw,centers[0],bus,centers[centers.length-1],bus);
@@ -760,9 +837,10 @@ function getConnSegments(lay){
     const lmy=lastCh.y+lastCh.fs*lastCh.capFrac;
     const vg=(fc.y-p.y-p.fs-p.textBlock.extraHeight)*C.VG_FRAC;
     seg(p.col,familyWidth(p,p.depth+1,MD),sx,p.y+p.fs+p.textBlock.extraHeight+vg,sx,lmy);
-    for(const ch of connected){
+    for(const {node:ch,clearance=0} of p.subtree?.childOffsets??connected.map(node=>({node}))){
+      if(ch.kind==='spacer')continue;
       const cy=ch.y+ch.fs*ch.capFrac;
-      seg(p.col,familyWidth(p,ch.depth,MD),sx,cy,sx+familyArm(p,ch.depth,MD)*0.70,cy);
+      seg(p.col,familyWidth(p,ch.depth,MD),sx,cy,sx+familyArm(p,ch.depth,MD)*0.70+clearance,cy);
     }
     p.children.forEach(subSegs);
   };
@@ -843,12 +921,37 @@ function drawConn(ctx,lay){
 }
 // R11: label-only override after normal color assignment; connections still use node.col.
 const PLACEHOLDER_COLOR='rgb(180,178,170)';
-function labelColor(node){return node.placeholder?PLACEHOLDER_COLOR:node.col;}
+// Multiplying RGB by one common factor preserves HSV hue/saturation; cap V at 1.
+function alternateInk(color){
+  const rgb=color.match(/\d+/g).map(Number),peak=Math.max(...rgb),factor=peak?Math.min(1.10,255/peak):1;
+  return 'rgb('+rgb.map(v=>Math.round(v*factor)).join(',')+')';
+}
+// Layout owns row membership. Rebuild presentation from base colors after layout or recolor.
+function refreshLabelColors(lay){
+  const row=nodes=>{
+    const real=nodes.filter(n=>n.kind!=='spacer');
+    if(real.length<2||!real.every(n=>n.col===real[0].col))return;
+    real.forEach((n,i)=>{if(i%2)n.inkColor=alternateInk(n.col);});
+  };
+  const walk=n=>{n.inkColor=n.col;n.children.forEach(walk);if((n.layoutDepth??n.depth)>0&&n.subtree?.childMode==='horizontal')row(n.children);};
+  walk(lay.root);
+  for(const tree of lay.trees??[lay]){
+    if(tree.d1Mode==='simple')row(tree.root.children);
+    else if(tree.d1Groups){
+      const rows=[],ranks=[];
+      for(const g of tree.d1Groups)if(g.node.kind!=='spacer'){
+        const rank=ranks[g.col]??0;ranks[g.col]=rank+1;(rows[rank]??=[]).push(g.node);
+      }
+      rows.forEach(row);
+    }
+  }
+}
+function labelColor(node,description=false){return node.placeholder&&!description?PLACEHOLDER_COLOR:node.inkColor??node.col;}
 function drawLbls(ctx,n){
   if(!n.synthetic&&n.kind!=='spacer'){
     ctx.textBaseline='alphabetic';
     for(const run of n.textBlock.runs){
-      ctx.fillStyle=run.description?n.col:labelColor(n);
+      ctx.fillStyle=labelColor(n,run.description);
       if(run.fs<=C.MAX_SAFE_FONT){ctx.font=run.fw+' '+run.fs+'px '+C.FONT;ctx.fillText(run.text,n.x+run.x,n.y+run.baseline);}
       else{const r=run.fs/C.MAX_SAFE_FONT;ctx.save();ctx.translate(n.x+run.x,n.y+run.baseline);ctx.scale(r,r);ctx.font=run.fw+' '+C.MAX_SAFE_FONT+'px '+C.FONT;ctx.fillText(run.text,0,0);ctx.restore();}
     }
@@ -1187,8 +1290,8 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
   const dtNode=n=>{
     if(!n.synthetic&&n.kind!=='spacer'){
       const isB=n.fw==='bold';
-      const tx=n.depth===0&&n.cx!=null?px(n.cx)-pdfStrW(n.label,isB,n.fs)/2:px(n.x);
-      for(const run of n.textBlock.runs)ops.push(renderLabel(tx+run.x*PDF_SCALE,py(n.y+run.baseline),run.text,run.fw==='bold',run.fs,run.description?n.col:labelColor(n)));
+      const tx=!n.titleLines&&n.depth===0&&n.cx!=null?px(n.cx)-pdfStrW(n.label,isB,n.fs)/2:px(n.x);
+      for(const run of n.textBlock.runs)ops.push(renderLabel(tx+run.x*PDF_SCALE,py(n.y+run.baseline),run.text,run.fw==='bold',run.fs,labelColor(n,run.description)));
     }
     n.children.forEach(dtNode);
   };
@@ -1382,8 +1485,8 @@ function preserveViewportAcrossLayoutChange(prevLay,newLay){
   const sOld=st.scale,sNew=sOld/k;
   st.panX+=sOld*aOld.x-sNew*aNew.x;st.panY+=sOld*aOld.y-sNew*aNew.y;st.scale=sNew;
 }
-// Scale transitions use real-node preorder only within the same accepted source revision.
-function preserveViewportAcrossScaleChange(prevLay,newLay){
+// Settings/presentation transitions match real-node preorder only within the same source revision.
+function preserveViewportAroundVisibleNode(prevLay,newLay){
   const r=viewportRect(),zoom=st.scale;
   if(!(r.width>0&&r.height>0&&Number.isFinite(zoom)&&zoom>0))return;
   const center={x:r.left+r.width/2,y:r.top+r.height/2},world={x:(center.x-st.panX)/zoom,y:(center.y-st.panY)/zoom};
@@ -1639,13 +1742,13 @@ function render(){
     st.lay=null;pendingColor=false;uiState.userTouchedCanvas=false;emptyEl.style.display='flex';draw();return;
   }
   const root=parse(text);if(!root)return;
-  flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts);attachPresentation(root,sourcePresentation);layoutPreferences.observeRoot(root,sourceReady,sourceStats);
+  flagPlaceholders(root,sourcePlaceholders);attachNodeTexts(root,sourceNodeTexts,sourceTitleLines);attachPresentation(root,sourcePresentation);attachChildPresence(root,sourceHasChildren);layoutPreferences.observeRoot(root,sourceReady,sourceStats);
   const prevLay=st.lay;
-  st.lay=layout(root,uiState.colorSeed);st.lay.hasDescriptions=!!(sourceNodeTexts&&sourceNodeTexts.some(text=>text.includes('\n')));pendingColor=false;emptyEl.style.display='none';
+  st.lay=layout(root,uiState.colorSeed);st.lay.hasDescriptions=!!(sourceNodeTexts&&sourceNodeTexts.some(text=>text.includes('\n')));refreshLabelColors(st.lay);pendingColor=false;emptyEl.style.display='none';
   const bounds=contentBounds(st.lay);fitBounds.set(st.lay,bounds);
-  layoutTransitions.set(st.lay,{scale:layoutPreferences.branchScale,revision:sourceRevision,bounds});
+  layoutTransitions.set(st.lay,{settingsRevision:layoutSettingsRevision,revision:sourceRevision,bounds});
   if(uiState.userTouchedCanvas&&prevLay){
-    if(presentationChanged||layoutTransitions.get(prevLay)?.scale!==layoutPreferences.branchScale)preserveViewportAcrossScaleChange(prevLay,st.lay);
+    if(presentationChanged||layoutTransitions.get(prevLay)?.settingsRevision!==layoutSettingsRevision)preserveViewportAroundVisibleNode(prevLay,st.lay);
     else if(st.lay.MD!==prevLay.MD)preserveViewportAcrossLayoutChange(prevLay,st.lay);
   }
   if(!holdDrawing&&canvas.clientWidth>0&&canvas.clientHeight>0&&!uiState.userTouchedCanvas)autoFit();
@@ -1662,10 +1765,19 @@ function setText(text,options={}){
     if(!Array.isArray(values)||values.length!==count||values.some(v=>typeof v!=='string')){const error=new TypeError('Node description metadata does not match the map outline');reportError(error);throw error;}
     nodeTexts=values.slice();
   }
+  let titleLines=null;
+  if(options&&'nodeTitleLines' in options){
+    const values=options.nodeTitleLines;
+    if(!nodeTexts||!Array.isArray(values)||values.length!==nodeTexts.length||Array.from(values).some((count,i)=>!Number.isSafeInteger(count)||count<1||count>nodeTexts[i].split('\n').length)){
+      const error=new TypeError('Invalid node title-line metadata');reportError(error);throw error;
+    }
+    titleLines=values.slice();
+  }
   let stats=null;
   if(options&&'outlineStats' in options){const value=options.outlineStats;
     if(!value||!Number.isSafeInteger(value.maxDepth)||value.maxDepth<0||!Number.isSafeInteger(value.maxSiblings)||value.maxSiblings<0){const error=new TypeError('Invalid complete-outline statistics');reportError(error);throw error;}
     stats={maxDepth:value.maxDepth,maxSiblings:value.maxSiblings};
+    for(const key of ['rootCount','maxFirstLevel'])if(key in value){if(!Number.isSafeInteger(value[key])||value[key]<0){const error=new TypeError('Invalid complete-outline statistics');reportError(error);throw error;}stats[key]=value[key];}
   }
   let presentation=null;
   if(options&&'nodePresentation' in options){
@@ -1673,12 +1785,18 @@ function setText(text,options={}){
     if(!Array.isArray(values)||values.length!==count||values.some(p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
     presentation=values.map(p=>({kind:p.kind,mapSize:mapSizeUnits(p.mapSize)/MAP_SIZE_UNITS}));
     const parsed=parse(text),stack=parsed?(parsed.synthetic?parsed.children.slice().reverse():[parsed]):[];let index=0;
-    while(stack.length){const n=stack.pop(),p=presentation[index];if(p.kind==='spacer'&&(n.children.length||nodeTexts&&nodeTexts[index]!=='')){const error=new TypeError('A spacer must be an empty leaf');reportError(error);throw error;}index++;for(let i=n.children.length-1;i>=0;i--)stack.push(n.children[i]);}
+    while(stack.length){const n=stack.pop(),p=presentation[index];if(p.kind==='spacer'&&(n.children.length||nodeTexts&&nodeTexts[index]!==''||titleLines&&titleLines[index]!==1)){const error=new TypeError('A spacer must be an empty leaf');reportError(error);throw error;}index++;for(let i=n.children.length-1;i>=0;i--)stack.push(n.children[i]);}
   }
-  const onlyPresentation=text===sourceText&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats)&&placeholders.join(',')===sourcePlaceholders.join(',');
+  let hasChildren=null;
+  if(options&&'nodeHasChildren' in options){
+    const values=options.nodeHasChildren,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
+    if(!Array.isArray(values)||values.length!==count||Array.from(values).some((v,i)=>typeof v!=='boolean'||presentation?.[i].kind==='spacer'&&v)){const error=new TypeError('Invalid canonical child-presence metadata');reportError(error);throw error;}
+    hasChildren=values.slice();
+  }
+  const onlyPresentation=text===sourceText&&JSON.stringify(titleLines)===JSON.stringify(sourceTitleLines)&&JSON.stringify(hasChildren)===JSON.stringify(sourceHasChildren)&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats)&&placeholders.join(',')===sourcePlaceholders.join(',');
   if(onlyPresentation&&JSON.stringify(presentation)===JSON.stringify(sourcePresentation))return;
-  if(!onlyPresentation)sourceRevision++;presentationChanged=presentationChanged||onlyPresentation;sourceStats=stats;sourcePresentation=presentation;sourceReady=true;
-  sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;
+  if(!onlyPresentation)sourceRevision++;presentationChanged=presentationChanged||onlyPresentation;sourceStats=stats;sourcePresentation=presentation;sourceHasChildren=hasChildren;sourceReady=true;
+  sourceTitleLines=titleLines;sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;
   if(!text.trim())flushRender();else if(onlyPresentation){pendingRender=true;if(!paused&&rtimer===null)rtimer=setTimeout(()=>{rtimer=null;render();},Math.max(0,50-(performance.now()-lastPresentationRender)));}else schedRender();
 }
 function getSettingBounds(){return layoutPreferences.getSettingBounds();}
@@ -1686,8 +1804,9 @@ function getSettings(){return{...layoutPreferences.getSettings(),colorSeed:uiSta
 function setSettings(partial={}){
   if(destroyed)return getSettings();
   if(!paused&&rtimer!==null)flushRender();
-  const before=JSON.stringify(getSettings());
+  const before=JSON.stringify(getSettings()),beforeLayout=JSON.stringify(layoutPreferences.getSettings());
   layoutPreferences.apply(partial);
+  if(beforeLayout!==JSON.stringify(layoutPreferences.getSettings()))layoutSettingsRevision++;
   if('colorSeed' in partial){const v=String(partial.colorSeed).trim();if(v!=='')uiState.colorSeed=Math.max(0,parseInt(v,10)||0);}
   if(before===JSON.stringify(getSettings()))return getSettings();
   flushRender();
@@ -1697,7 +1816,7 @@ function setSettings(partial={}){
 // R12-4B: recolor the retained layout without touching source, geometry or animation.
 function applyPendingColor(){
   if(!pendingColor||paused||destroyed)return;
-  if(st.lay)assignColors(st.lay.root,220,0,0,uiState.colorSeed);
+  if(st.lay){assignColors(st.lay.root,220,0,0,uiState.colorSeed);refreshLabelColors(st.lay);}
   pendingColor=false;
 }
 function setColorSeed(seed){
@@ -1805,5 +1924,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.12.3',apiVersion:1,capabilities:['text-input','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.14.1',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();
