@@ -1,4 +1,4 @@
-/* MindMap 1.14.3 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.14.4 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -319,7 +319,7 @@ function measureTextBlock(node,MD){
   for(let i=0;i<lines.length;i++){
     const text=lines[i],ink=metrics[i],previous=runs[i-1];
     const baseline=previous?previous.baseline+textLineAdvance(previous,ink,node.fs):node.fs*C.BASELINE_FRAC;
-    const run={text,fs:node.fs,fw:node.fw,x:(titleWidth-ink.width)/2,baseline,...ink,description:false};
+    const run={text,fs:node.fs,fw:node.fw,x:0,baseline,...ink,description:false};
     if(source&&text.length)runSources.set(run,{start:offset,end:offset+text.length});offset+=text.length+1;runs.push(run);
   }
   const title=runs[runs.length-1],baseline=title.baseline,titleBottom=node.titleLines?node.fs+baseline-node.fs*C.BASELINE_FRAC:node.fs;
@@ -331,7 +331,7 @@ function measureTextBlock(node,MD){
     for(const text of lines){
       const ink=inkMetrics(text,fs,'normal');
       const y=previous?previous.baseline+textLineAdvance(previous,ink,fs):Math.max(titleBottom,baseline+title.descent)+gap+(title.descent>node.fs*0.02?title.descent*0.5:0)+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
-      const run={text,fs,fw:'normal',x:(titleWidth-ink.width)/2,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
+      const run={text,fs,fw:'normal',x:0,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
     }
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
   }
@@ -341,8 +341,19 @@ function measureTextBlock(node,MD){
     const first=runs[0].baseline,advance=(runs[runs.length-1].baseline-first)/(runs.length-1);
     for(let i=1;i<runs.length-1;i++)runs[i].baseline=first+i*advance;
   }
-  const minX=runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),titleWidth);
-  return{runs,titleWidth,width:node.description===undefined?width:maxX-minX,minX,maxX,bottom,extraHeight:Math.max(0,bottom-node.fs)};
+  const block={runs,titleWidth,width,bottom,extraHeight:Math.max(0,bottom-node.fs)};
+  alignTextBlock(block,false);
+  return block;
+}
+// Incoming placement owns alignment; all consumers share these measured run coordinates.
+function alignTextBlock(block,leftAligned){
+  if(!block.runs.length)return false;
+  let changed=false;
+  for(const run of block.runs){const x=leftAligned?0:(block.titleWidth-run.width)/2;changed=changed||run.x!==x;run.x=x;}
+  block.minX=block.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0);
+  block.maxX=block.runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),block.titleWidth);
+  if(block.runs.some(run=>run.description))block.width=block.maxX-block.minX;
+  return changed;
 }
 function attachNodeTexts(root,texts,counts){
   if(!texts)return;
@@ -504,8 +515,8 @@ function annotateNodes(node,MD){
   node.children.forEach(ch=>annotateNodes(ch,MD));prepareFamily(node,MD);
 }
 // One bottom-up footprint record per node; placement never remeasures descendants.
-function measureSubtree(node,MD,nominal=false){
-  node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
+function measureSubtree(node,MD,nominal=false,reuseChildren=false){
+  if(!reuseChildren)node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
   let minX=nominal?0:node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=nominal?nodeWidth(node):node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
   const customSize=(node.mapSize??1)!==1||children.some(ch=>ch.kind!=='spacer'&&ch.subtree.customSize);
@@ -514,6 +525,11 @@ function measureSubtree(node,MD,nominal=false){
   let minY=ownTop;
   let horizontal=layoutPreferences.horizontalFamily(node);
   if(children.length){
+    const alignChildren=stacked=>{
+      const leftAligned=node.layoutDepth===0?rootChildrenStacked(node):stacked;
+      for(const ch of children)if(alignTextBlock(ch.textBlock,leftAligned))measureSubtree(ch,MD,nominal,true);
+    };
+    alignChildren(!horizontal);
     if(horizontal){
       let cursor=0,remaining=node.family.count;
       for(let i=0;i<children.length;i++){
@@ -536,7 +552,7 @@ function measureSubtree(node,MD,nominal=false){
       if(layoutPreferences.lengthLimitEnabled){
         const span=cursor,titles=node.textBlock.runs.filter(run=>!run.description),titleWidth=Math.max(...titles.map(run=>run.x+Math.max(run.width,run.right)))-Math.min(0,...titles.map(run=>run.x-run.left)),threshold=titleWidth*layoutPreferences.lengthLimitRatio;
         const tolerance=1e-9*Math.max(1,span,threshold);
-        if(!Number.isFinite(span)||!Number.isFinite(threshold)||titleWidth<=0||span>threshold+tolerance){horizontal=false;offsets.length=0;height=node.fs*C.LINE_H+node.textBlock.extraHeight;}
+        if(!Number.isFinite(span)||!Number.isFinite(threshold)||titleWidth<=0||span>threshold+tolerance){horizontal=false;offsets.length=0;height=node.fs*C.LINE_H+node.textBlock.extraHeight;alignChildren(true);}
       }
     }
     if(!horizontal){
@@ -717,11 +733,13 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   return{root,MD,pW:_gMaxX+C.RIGHT_M,pH:gridY1+C.BOT_M,d1Y:gridStartY,
     d1Mode:'grid',d1Cols:cols,d1Groups,d1ColX,d1BusY,d1X0:gridX0,d1X1:gridX1,firstRowBonus};
 }
-function layoutTree(root,MD,colorSeed,recolor=true){
+function rootChildrenStacked(root){
   const NC=root.children.filter(ch=>ch.kind!=='spacer').length;
   // A lone real root child always uses the existing left-side vertical connector.
-  if(NC===1&&!root.synthetic)return layoutGrid(root,MD,colorSeed,recolor);
-  return(!NC||layoutPreferences.hlimitInf||NC<=layoutPreferences.hlimitN)?layoutSimple(root,MD,colorSeed,recolor):layoutGrid(root,MD,colorSeed,recolor);
+  return NC===1&&!root.synthetic||NC>0&&!layoutPreferences.hlimitInf&&NC>layoutPreferences.hlimitN;
+}
+function layoutTree(root,MD,colorSeed,recolor=true){
+  return rootChildrenStacked(root)?layoutGrid(root,MD,colorSeed,recolor):layoutSimple(root,MD,colorSeed,recolor);
 }
 function translateLayout(lay,dx,dy){
   const walk=n=>{n.x+=dx;n.y+=dy;if(n.cx!=null)n.cx+=dx;n.children.forEach(walk);};walk(lay.root);
@@ -734,9 +752,11 @@ function layout(root,colorSeed){
   const roots=root.synthetic?root.children:[root],logical=(n,d)=>{n.layoutDepth=d;n.children.forEach(ch=>logical(ch,d+1));};
   roots.forEach(n=>logical(n,0));
   const MD=visualMaxD(root);annotateNodes(root,MD);
-  const described=hasDescription(root),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1);
+  const described=hasDescription(root),multiline=!!sourceTitleLines?.some(count=>count>1),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1);
+  const stackedRoots=root.synthetic&&layoutPreferences.rootEnabled&&layoutPreferences.rootOrder!=='across'&&layoutPreferences.rootEffective<roots.filter(n=>n.kind!=='spacer').length;
+  if(stackedRoots)roots.forEach(n=>alignTextBlock(n.textBlock,true));
   // Spacer-only footprints retain the original nominal widths of unaffected real branches.
-  if(layoutPreferences.levelsEnabled||described||presented){const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);roots.forEach(n=>measureSubtree(n,MD,nominal));}
+  if(layoutPreferences.levelsEnabled||described||multiline||presented){const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);roots.forEach(n=>measureSubtree(n,MD,nominal));}
   if(!root.synthetic)return layoutTree(root,MD,colorSeed);
   // Color once in original whole-map order; outer packing only translates complete trees.
   root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
@@ -1930,5 +1950,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.14.3',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.14.4',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();

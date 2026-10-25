@@ -1,6 +1,6 @@
 # MindMapOutliner
 
-Unpublished map features candidate: **Outliner1.12.2 / MindMap1.14.3 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+Unpublished map features candidate: **Outliner1.12.2 / MindMap1.14.4 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
 
 Open `index.html` by double-clicking it. Keep these four files together: `index.html`, `outliner.js`, `mindmap.js`, `README.md`. No server, build, framework, bundler or installation is required. The complete Outliner is the source of truth; Mind Map is its live view. This folder is the entire upload package.
 
@@ -135,7 +135,7 @@ Edit the single commented `MODULES` block in `index.html`:
 ```js
 const MODULES = {
   outliner: { src: './outliner.js', v: '1.12.2' },
-  mindmap: { src: './mindmap.js', v: '1.14.3' }
+  mindmap: { src: './mindmap.js', v: '1.14.4' }
 };
 ```
 
@@ -546,3 +546,8 @@ MindMap rejects sparse or invalid nodeTexts/nodePresentation metadata synchronou
 MindMap1.14.3 / API1, unpublished; Outliner1.12.2 is unchanged. Every rendered line within one node uses the same baseline interval: the sum of its existing measured gaps divided by the number of gaps. This includes title, description, wrapped and empty lines, even where title/description font sizes differ. The first and last baselines, total span, terminal padding, text metrics, colors and Thai/PDF shaping stay unchanged. Single- and two-line nodes retain exact geometry.
 
 The per-pair Thai ink clearance from the preceding line-gap release now contributes to the average instead of enforcing a separate minimum on every pair. Some upper/lower Thai marks may touch or overlap; this is the explicit owner-approved tradeoff for evenly spaced lines. Canvas and PDF consume the same positions; no duplicate renderer policy or new storage/API is added. Detailed plan and checks: ../dev/uniform-node-lines/report.md.
+
+
+### Placement-aware multiline alignment — 2026-10-25
+
+MindMap1.14.4 / API1: vertically stacked nodes use left-aligned title/description lines; horizontal rows retain centered lines. Root grid columns, lone children, deeper stack fallback and down-packed root columns follow the same rule. Shared measured runs drive Canvas, PDF and search. Baselines, fonts, Thai shaping and Outliner1.12.2 are unchanged. Unpublished.
