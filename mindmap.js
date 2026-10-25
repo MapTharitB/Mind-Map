@@ -1,4 +1,4 @@
-/* MindMap 1.14.4 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.14.7 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -144,7 +144,7 @@ function safeFileName(label){
 }
 
 const C={
-  BASE_FONT:10,RATIO:DEFAULT_BRANCH_SCALE,LINE_H:1.5,DESC_GAP_R:0.25,DESC_WRAP_EM:28,
+  BASE_FONT:10,RATIO:DEFAULT_BRANCH_SCALE,LINE_H:1.5,DESC_GAP_R:0.25,
   GAP_R:0.75,SUB_GAP_R:0.20125,CHILD_STEP_R:0.85,RISE_PAD_R:0.70,LOWER_THAI_CHILD_R:1.5,LOWER_THAI_FANOUT_FRAC:0.5,
   D0_D1_GAP_MULT:1.145,D1_TXT_PAD_R:0.105,
   D1_ROW_GAP_R:0.195,SIBLING_GAP_R:0.135,D1_ARM_FLOOR_R:0.5,
@@ -282,27 +282,8 @@ function inkMetrics(text,fs,fw){
   return{width:m.width*ratio,ascent:(m.actualBoundingBoxAscent??safe*0.8)*ratio,descent:(m.actualBoundingBoxDescent??safe*0.2)*ratio,
     left:(m.actualBoundingBoxLeft??0)*ratio,right:(m.actualBoundingBoxRight??m.width)*ratio};
 }
-// Owner update: automatic visual wrapping only; canonical description payload is untouched.
-const descriptionWords=typeof Intl.Segmenter==='function'?new Intl.Segmenter('th',{granularity:'word'}):null;
+// Search highlights retain grapheme boundaries for Thai marks.
 const descriptionGraphemes=typeof Intl.Segmenter==='function'?new Intl.Segmenter('th',{granularity:'grapheme'}):null;
-function wrapDescriptionLine(text,fs){
-  if(!text)return [''];
-  const width=fs*C.DESC_WRAP_EM,lines=[];
-  const words=descriptionWords?Array.from(descriptionWords.segment(text),part=>part.segment):text.split(/(\s+)/).filter(Boolean);
-  let line='';
-  const append=part=>{
-    if(line&&mW(line+part,fs,'normal')>width){lines.push(line);line='';}
-    line+=part;
-  };
-  for(const word of words){
-    if(mW(word,fs,'normal')<=width){append(word);continue;}
-    // Never break a grapheme/Thai mark cluster. Older engines keep an unbreakable token intact.
-    if(!descriptionGraphemes){append(word);continue;}
-    for(const part of descriptionGraphemes.segment(word))append(part.segment);
-  }
-  if(line||!lines.length)lines.push(line);
-  return lines;
-}
 function descriptionSize(node,MD){
   // Preserve the original arithmetic at the default scale, including its minimum.
   return (layoutPreferences.branchScale===DEFAULT_BRANCH_SCALE?fsz(node.depth+2,MD):node.baseFs/(C.RATIO*C.RATIO))*(node.mapSize??1);
@@ -311,6 +292,12 @@ function descriptionSize(node,MD){
 function textLineAdvance(previous,ink,fs){
   const occupied=previous.descent+ink.ascent;
   return occupied+Math.max((fs*C.LINE_H-occupied)*0.5,fs*C.DESC_GAP_R);
+}
+// Average within one font-size section; never let descriptions compress title lines.
+function averageTextBaselines(runs,start=0){
+  const count=runs.length-start;if(count<3)return;
+  const first=runs[start].baseline,advance=(runs[runs.length-1].baseline-first)/(count-1);
+  for(let i=1;i<count-1;i++)runs[start+i].baseline=first+i*advance;
 }
 function measureTextBlock(node,MD){
   if(node.kind==='spacer')return{runs:[],width:node.fs,minX:0,maxX:node.fs,bottom:node.fs*C.LINE_H,extraHeight:0};
@@ -322,34 +309,34 @@ function measureTextBlock(node,MD){
     const run={text,fs:node.fs,fw:node.fw,x:0,baseline,...ink,description:false};
     if(source&&text.length)runSources.set(run,{start:offset,end:offset+text.length});offset+=text.length+1;runs.push(run);
   }
+  averageTextBaselines(runs);
   const title=runs[runs.length-1],baseline=title.baseline,titleBottom=node.titleLines?node.fs+baseline-node.fs*C.BASELINE_FRAC:node.fs;
   let width=titleWidth,bottom=titleBottom;
   if(node.description!==undefined){
-    const offsets=[];let offset=source?.descriptionStart??0;
-    const fs=descriptionSize(node,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n').flatMap(line=>{const wrapped=wrapDescriptionLine(line,fs);for(const text of wrapped){offsets.push(offset);offset+=text.length;}offset++;return wrapped;});
-    let previous=null,index=0;
+    let offset=source?.descriptionStart??0;
+    const fs=descriptionSize(node,MD),gap=fs*C.DESC_GAP_R,lines=node.description.split('\n');
+    let previous=null;
     for(const text of lines){
       const ink=inkMetrics(text,fs,'normal');
       const y=previous?previous.baseline+textLineAdvance(previous,ink,fs):Math.max(titleBottom,baseline+title.descent)+gap+(title.descent>node.fs*0.02?title.descent*0.5:0)+Math.max(fs*C.BASELINE_FRAC,ink.ascent);
-      const run={text,fs,fw:'normal',x:0,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
+      const run={text,fs,fw:'normal',x:0,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offset,end:offset+text.length});offset+=text.length+1;runs.push(run);previous=run;width=Math.max(width,ink.width);
     }
+    averageTextBaselines(runs,runs.length-lines.length);
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
   }
-  // Owner update: average all within-node baseline gaps, accepting local Thai ink overlap.
-  // Their sum is the first-to-last span; keep both endpoints and terminal padding exact.
-  if(runs.length>2){
-    const first=runs[0].baseline,advance=(runs[runs.length-1].baseline-first)/(runs.length-1);
-    for(let i=1;i<runs.length-1;i++)runs[i].baseline=first+i*advance;
-  }
-  const block={runs,titleWidth,width,bottom,extraHeight:Math.max(0,bottom-node.fs)};
+  const block={runs,titleWidth,descriptionWidth:runs.reduce((w,run)=>run.description?Math.max(w,run.width):w,0),width,bottom,extraHeight:Math.max(0,bottom-node.fs)};
   alignTextBlock(block,false);
   return block;
 }
 // Incoming placement owns alignment; all consumers share these measured run coordinates.
-function alignTextBlock(block,leftAligned){
+// Titles follow incoming placement; descriptions can follow the final immediate-child layout.
+function alignTextBlock(block,leftAligned,descriptionLeftAligned=leftAligned,descriptionAnchor=block.descriptionAnchor??0){
   if(!block.runs.length)return false;
+  block.leftAligned=leftAligned;block.descriptionAnchor=descriptionAnchor;
+  // A short left-aligned paragraph sits over its outgoing shaft; longer ones stop at the left edge.
+  const descriptionX=Math.max(0,descriptionAnchor-block.descriptionWidth/2);
   let changed=false;
-  for(const run of block.runs){const x=leftAligned?0:(block.titleWidth-run.width)/2;changed=changed||run.x!==x;run.x=x;}
+  for(const run of block.runs){const x=(run.description?descriptionLeftAligned:leftAligned)?(run.description?descriptionX:0):(block.titleWidth-run.width)/2;changed=changed||run.x!==x;run.x=x;}
   block.minX=block.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0);
   block.maxX=block.runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),block.titleWidth);
   if(block.runs.some(run=>run.description))block.width=block.maxX-block.minX;
@@ -517,7 +504,7 @@ function annotateNodes(node,MD){
 // One bottom-up footprint record per node; placement never remeasures descendants.
 function measureSubtree(node,MD,nominal=false,reuseChildren=false){
   if(!reuseChildren)node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
-  let minX=nominal?0:node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=nominal?nodeWidth(node):node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node)),height=node.fs*C.LINE_H+node.textBlock.extraHeight;
+  let height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
   const customSize=(node.mapSize??1)!==1||children.some(ch=>ch.kind!=='spacer'&&ch.subtree.customSize);
   const ownTop=Math.min(0,...node.textBlock.runs.map(run=>run.baseline-run.ascent));
@@ -527,7 +514,7 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
   if(children.length){
     const alignChildren=stacked=>{
       const leftAligned=node.layoutDepth===0?rootChildrenStacked(node):stacked;
-      for(const ch of children)if(alignTextBlock(ch.textBlock,leftAligned))measureSubtree(ch,MD,nominal,true);
+      for(const ch of children)if(alignTextBlock(ch.textBlock,leftAligned,ch.family.count?ch.subtree.childMode==='vertical':leftAligned))measureSubtree(ch,MD,nominal,true);
     };
     alignChildren(!horizontal);
     if(horizontal){
@@ -575,8 +562,13 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
       }
       height=Math.max(height,y);
     }
-    for(const offset of offsets){minY=Math.min(minY,offset.y+offset.node.subtree.minY);minX=Math.min(minX,offset.x+offset.node.subtree.minX);maxX=Math.max(maxX,offset.x+offset.node.subtree.maxX);}
   }
+  // Resolve descriptions only after length-limit fallback; leaves keep their own alignment.
+  const descriptionLeft=node.family.count?(node.layoutDepth===0?rootChildrenStacked(node):!horizontal):node.textBlock.leftAligned;
+  const descriptionAnchor=node.family.count&&descriptionLeft?(node.layoutDepth===0&&Math.min(layoutPreferences.hlimitN,packingUnits(children).length)>1?titleWidth(node)/2:spineOffsetOf(node)):0;
+  alignTextBlock(node.textBlock,node.textBlock.leftAligned,descriptionLeft,descriptionAnchor);
+  let minX=nominal?0:node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=nominal?nodeWidth(node):node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node));
+  for(const offset of offsets){minY=Math.min(minY,offset.y+offset.node.subtree.minY);minX=Math.min(minX,offset.x+offset.node.subtree.minX);maxX=Math.max(maxX,offset.x+offset.node.subtree.maxX);}
   if(customSize){
     const connected=offsets.filter(offset=>offset.node.kind!=='spacer');
     if(connected.length){
@@ -1950,5 +1942,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.14.4',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.14.7',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();

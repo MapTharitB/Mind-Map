@@ -1,6 +1,6 @@
 # MindMapOutliner
 
-Unpublished map features candidate: **Outliner1.12.2 / MindMap1.14.4 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+Unpublished map features candidate: **Outliner1.12.3 / MindMap1.14.7 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
 
 Open `index.html` by double-clicking it. Keep these four files together: `index.html`, `outliner.js`, `mindmap.js`, `README.md`. No server, build, framework, bundler or installation is required. The complete Outliner is the source of truth; Mind Map is its live view. This folder is the entire upload package.
 
@@ -134,8 +134,8 @@ Edit the single commented `MODULES` block in `index.html`:
 
 ```js
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.12.2' },
-  mindmap: { src: './mindmap.js', v: '1.14.4' }
+  outliner: { src: './outliner.js', v: '1.12.3' },
+  mindmap: { src: './mindmap.js', v: '1.14.7' }
 };
 ```
 
@@ -551,3 +551,18 @@ The per-pair Thai ink clearance from the preceding line-gap release now contribu
 ### Placement-aware multiline alignment — 2026-10-25
 
 MindMap1.14.4 / API1: vertically stacked nodes use left-aligned title/description lines; horizontal rows retain centered lines. Root grid columns, lone children, deeper stack fallback and down-packed root columns follow the same rule. Shared measured runs drive Canvas, PDF and search. Baselines, fonts, Thai shaping and Outliner1.12.2 are unchanged. Unpublished.
+
+
+### Description alignment follows children — 2026-10-25
+
+MindMap1.14.5 / API1: title alignment still follows the node's placement. Descriptions follow immediate visible real children: left for a vertical stack, centered for a horizontal row. Leaves, collapsed nodes and spacer-only children retain the node's own alignment, as the owner requested. Length-limit fallback and first-level grid rules are respected. Canvas, PDF and search share these coordinates; Outliner remains1.12.2. Unpublished.
+
+
+### Description connector and search polish — 2026-10-25
+
+Unpublished Outliner1.12.3 / MindMap1.14.6 / API1. Short left-aligned description blocks center over their outgoing vertical connector, stopping at the node left edge as they grow. Without visible real children there is no special offset. Descriptions retain explicit line breaks only and their full width participates in map packing. Canvas/PDF/search share measured runs. Clicking the active search × releases its button focus and returns the search border to inactive. Other search input/keyboard behavior is unchanged.
+
+
+### Separate title and description line spacing — 2026-10-25
+
+MindMap1.14.7 / API1 averages baseline gaps independently inside the title and description. The larger title no longer stretches description lines, and description lines cannot compress the title. The existing measured section endpoints and title/description separator remain; uniform spacing within each section retains the previously accepted Thai overlap tradeoff. This supersedes the old mixed-size whole-node average. Connector-aware horizontal alignment, explicit-only description breaks and search-close behavior are retained. Outliner1.12.3 is unchanged. Unpublished.
