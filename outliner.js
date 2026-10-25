@@ -1,4 +1,4 @@
-/* Outliner version 1.12.1 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.12.2 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -437,7 +437,7 @@ const template = String.raw`<div class="page">
 <!-- Owner override 2026-10-16 (R12-3A): Clear All first; then separated style, expand/collapse and export groups. Historical REQUIREMENT above is retained verbatim. -->
 <!-- Latest owner override 2026-10-16 (V1.1): styles first; Clear All last after a separator. Supersedes the earlier Clear-All-first override retained above. -->
 <div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="spacer" aria-keyshortcuts="Control+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
+<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
@@ -1786,9 +1786,15 @@ listen(document, 'keydown', e => {
   if (e.key === 'Enter') { e.preventDefault(); const r = roots(), t = r[r.length - 1]; setSel(new Set()); if (t) focusNode(t.id); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); delItems(roots()); }
   else if (e.key === 'Escape') { setSel(new Set()); if (anchor) focusNode(anchor.id); }
-  else if (mod && (k === 'c' || k === 'x')) { e.preventDefault(); const it = roots();
+  else if (mod && (k === 'c' || k === 'x')) { e.preventDefault(); const it = roots(), cutSnapshot = k === 'x' ? JSON.stringify(it) : null;
     // Cut removes the bullets ONLY after the copy succeeded (the copy is asynchronous and can be refused).
-    copyText(toText(it)).then(ok => { if (destroyed || k !== 'x') return; const live = it.filter(n => par.has(n)); if (ok) { if (live.length) delItems(live); } else toast('Copy failed, nothing was cut'); }); }
+    copyText(toText(it)).then(ok => {
+      if (destroyed || k !== 'x') return;
+      if (!ok) { toast('Copy failed, nothing was cut'); return; }
+      const live = it.filter(n => par.has(n));
+      if (live.length !== it.length || JSON.stringify(it) !== cutSnapshot) { toast('Outline changed, nothing was cut'); return; }
+      if (live.length) delItems(live);
+    }); }
   else if (e.key === 'Tab') {
     e.preventDefault(); tab(e.shiftKey);
   } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -2067,5 +2073,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.12.1', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.12.2', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

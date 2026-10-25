@@ -1,6 +1,6 @@
 # MindMapOutliner
 
-Unpublished map features candidate: **Outliner1.12.1 / MindMap1.14.1 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+Unpublished map features candidate: **Outliner1.12.2 / MindMap1.14.3 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
 
 Open `index.html` by double-clicking it. Keep these four files together: `index.html`, `outliner.js`, `mindmap.js`, `README.md`. No server, build, framework, bundler or installation is required. The complete Outliner is the source of truth; Mind Map is its live view. This folder is the entire upload package.
 
@@ -134,8 +134,8 @@ Edit the single commented `MODULES` block in `index.html`:
 
 ```js
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.12.1' },
-  mindmap: { src: './mindmap.js', v: '1.14.1' }
+  outliner: { src: './outliner.js', v: '1.12.2' },
+  mindmap: { src: './mindmap.js', v: '1.14.3' }
 };
 ```
 
@@ -532,3 +532,17 @@ Before downgrading, keep a copy of the saved outline data and a v3 export, and r
 Canvas, bounds, search offsets and normal PDF export consume the shared multiline text runs. Thai/HarfBuzz shaping and all Sarabun/import URLs stay unchanged. Physical Safari, OS IME and exhaustive D6 remain unverified by Edge automation. The known extreme-size PDF omission and inherited slow Undo are outside this batch.
 
 Within-node line spacing (2026-10-24): adjacent title lines and adjacent description lines halve free measured whitespace, bounded below by the existing 0.25-em ink clearance for Thai upper/lower marks and other glyphs. Title/description separation, single-line geometry and between-node spacing rules remain. Canvas and PDF share these positions. Ctrl+Enter now owns Description in body and focused-heading fields (replacing heading navigation); Alt+Enter owns Spacer only in body fields or one selected body node. Shift+Enter remains a title/description newline.
+
+
+## Code health maintenance — 2026-10-24
+
+Outliner1.12.2 / MindMap1.14.2 / API1, unpublished. Cut waits for clipboard success and now also verifies that every selected subtree remains present and unchanged. If edits or removals occurred while copying, it keeps the current outline and reports “Outline changed, nothing was cut”; the clipboard may contain the earlier copied text. Failed copy still deletes nothing.
+
+MindMap rejects sparse or invalid nodeTexts/nodePresentation metadata synchronously through the existing error callback before changing accepted source. Dense valid metadata is unchanged. No layout, styles, shortcuts, storage, public API or PDF shaping/resource changes. The known extreme-size PDF omission and historical slow Undo remain unresolved; this audit does not certify universal optimality or physical Safari/IME acceptance. Detailed audit and verification: ../dev/code-health-audit/report.md.
+
+
+## Uniform within-node line spacing — 2026-10-25
+
+MindMap1.14.3 / API1, unpublished; Outliner1.12.2 is unchanged. Every rendered line within one node uses the same baseline interval: the sum of its existing measured gaps divided by the number of gaps. This includes title, description, wrapped and empty lines, even where title/description font sizes differ. The first and last baselines, total span, terminal padding, text metrics, colors and Thai/PDF shaping stay unchanged. Single- and two-line nodes retain exact geometry.
+
+The per-pair Thai ink clearance from the preceding line-gap release now contributes to the average instead of enforcing a separate minimum on every pair. Some upper/lower Thai marks may touch or overlap; this is the explicit owner-approved tradeoff for evenly spaced lines. Canvas and PDF consume the same positions; no duplicate renderer policy or new storage/API is added. Detailed plan and checks: ../dev/uniform-node-lines/report.md.

@@ -1,4 +1,4 @@
-/* MindMap 1.14.1 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.14.3 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -334,6 +334,12 @@ function measureTextBlock(node,MD){
       const run={text,fs,fw:'normal',x:(titleWidth-ink.width)/2,baseline:y,...ink,description:true};if(source)runSources.set(run,{start:offsets[index],end:offsets[index]+text.length});index++;runs.push(run);previous=run;width=Math.max(width,ink.width);
     }
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
+  }
+  // Owner update: average all within-node baseline gaps, accepting local Thai ink overlap.
+  // Their sum is the first-to-last span; keep both endpoints and terminal padding exact.
+  if(runs.length>2){
+    const first=runs[0].baseline,advance=(runs[runs.length-1].baseline-first)/(runs.length-1);
+    for(let i=1;i<runs.length-1;i++)runs[i].baseline=first+i*advance;
   }
   const minX=runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),titleWidth);
   return{runs,titleWidth,width:node.description===undefined?width:maxX-minX,minX,maxX,bottom,extraHeight:Math.max(0,bottom-node.fs)};
@@ -1762,7 +1768,7 @@ function setText(text,options={}){
   let nodeTexts=null;
   if(options&&'nodeTexts' in options){
     const values=options.nodeTexts,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
-    if(!Array.isArray(values)||values.length!==count||values.some(v=>typeof v!=='string')){const error=new TypeError('Node description metadata does not match the map outline');reportError(error);throw error;}
+    if(!Array.isArray(values)||values.length!==count||Array.from(values).some(v=>typeof v!=='string')){const error=new TypeError('Node description metadata does not match the map outline');reportError(error);throw error;}
     nodeTexts=values.slice();
   }
   let titleLines=null;
@@ -1782,7 +1788,7 @@ function setText(text,options={}){
   let presentation=null;
   if(options&&'nodePresentation' in options){
     const values=options.nodePresentation,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
-    if(!Array.isArray(values)||values.length!==count||values.some(p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
+    if(!Array.isArray(values)||values.length!==count||Array.from(values).some(p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
     presentation=values.map(p=>({kind:p.kind,mapSize:mapSizeUnits(p.mapSize)/MAP_SIZE_UNITS}));
     const parsed=parse(text),stack=parsed?(parsed.synthetic?parsed.children.slice().reverse():[parsed]):[];let index=0;
     while(stack.length){const n=stack.pop(),p=presentation[index];if(p.kind==='spacer'&&(n.children.length||nodeTexts&&nodeTexts[index]!==''||titleLines&&titleLines[index]!==1)){const error=new TypeError('A spacer must be an empty leaf');reportError(error);throw error;}index++;for(let i=n.children.length-1;i>=0;i--)stack.push(n.children[i]);}
@@ -1924,5 +1930,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.14.1',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.14.3',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();
