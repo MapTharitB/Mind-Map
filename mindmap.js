@@ -1,4 +1,4 @@
-/* MindMap 1.14.7 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.14.8 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -1777,9 +1777,11 @@ function setText(text,options={}){
   const indexes=options&&options.placeholderNodes;
   const placeholders=Array.isArray(indexes)?[...new Set(indexes.filter(i=>Number.isInteger(i)&&i>=0))].sort((a,b)=>a-b):[];
   text=String(text??'');
+  let metadataCount=null;
+  function countMetadataNodes(){return metadataCount??(metadataCount=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length);}
   let nodeTexts=null;
   if(options&&'nodeTexts' in options){
-    const values=options.nodeTexts,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
+    const values=options.nodeTexts,count=countMetadataNodes();
     if(!Array.isArray(values)||values.length!==count||Array.from(values).some(v=>typeof v!=='string')){const error=new TypeError('Node description metadata does not match the map outline');reportError(error);throw error;}
     nodeTexts=values.slice();
   }
@@ -1799,7 +1801,7 @@ function setText(text,options={}){
   }
   let presentation=null;
   if(options&&'nodePresentation' in options){
-    const values=options.nodePresentation,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
+    const values=options.nodePresentation,count=countMetadataNodes();
     if(!Array.isArray(values)||values.length!==count||Array.from(values).some(p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
     presentation=values.map(p=>({kind:p.kind,mapSize:mapSizeUnits(p.mapSize)/MAP_SIZE_UNITS}));
     const parsed=parse(text),stack=parsed?(parsed.synthetic?parsed.children.slice().reverse():[parsed]):[];let index=0;
@@ -1807,7 +1809,7 @@ function setText(text,options={}){
   }
   let hasChildren=null;
   if(options&&'nodeHasChildren' in options){
-    const values=options.nodeHasChildren,count=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length;
+    const values=options.nodeHasChildren,count=countMetadataNodes();
     if(!Array.isArray(values)||values.length!==count||Array.from(values).some((v,i)=>typeof v!=='boolean'||presentation?.[i].kind==='spacer'&&v)){const error=new TypeError('Invalid canonical child-presence metadata');reportError(error);throw error;}
     hasChildren=values.slice();
   }
@@ -1942,5 +1944,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.14.7',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.14.8',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();

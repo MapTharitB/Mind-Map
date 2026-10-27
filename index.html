@@ -170,8 +170,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.12.3' },
-  mindmap: { src: './mindmap.js', v: '1.14.7' }
+  outliner: { src: './outliner.js', v: '1.14.0' },
+  mindmap: { src: './mindmap.js', v: '1.14.8' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, presentationSupported = true) {
@@ -581,6 +581,10 @@ function scheduleSync() {
   if(!mapVisible() || syncFrame!==null)return;
   syncFrame=requestAnimationFrame(()=>{syncFrame=null;flushSync();});
 }
+function setSyncCollapse(enabled) {
+  if(syncCollapse===enabled)return;
+  syncCollapse=enabled;write('moa:syncCollapse',syncCollapse);syncButtons();scheduleSync();
+}
 function syncButtons() {
   $('sync-collapse').setAttribute('aria-pressed',String(syncCollapse));
   const focus=mapFocus.value,pinned=focus.pinnedId!==null,button=$('sync-focus');
@@ -856,7 +860,7 @@ divider.addEventListener('keydown',event=>{
 });
 window.addEventListener('blur',()=>{lastTap=null;if(drag)endDrag({pointerId:drag.id},true);});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&drag){event.preventDefault();endDrag({pointerId:drag.id},true);}});
-$('sync-collapse').addEventListener('click',()=>{syncCollapse=!syncCollapse;write('moa:syncCollapse',syncCollapse);syncButtons();scheduleSync();});
+$('sync-collapse').addEventListener('click',()=>setSyncCollapse(!syncCollapse));
 $('sync-focus').addEventListener('click',()=>mapFocus.topAction());
 $('map-more').addEventListener('click',()=>{cancelDismissal();const open=$('map-options').hidden;$('map-options').hidden=!open;$('map-more').setAttribute('aria-expanded',String(open));if(open)refreshSettings();updateControlPlacement();});
 document.addEventListener('pointerdown',event=>{
@@ -1062,6 +1066,7 @@ async function start() {
     if(hasPin)outline.on('pinFocus',mapFocus.request);
     mapFocus.initialize(outline.getSnapshot({titleLines:true}),hasPin);
     ['change','toggle','zoom'].forEach(event=>outline.on(event,scheduleSync));
+    if(module.capabilities.includes('expansion-level-event-v1'))outline.on('expansionLevel',()=>setSyncCollapse(true));
     if(module.capabilities.includes('search-query-v1')&&typeof outline.getSearchQuery==='function'){
       outline.on('search',receiveSearch);
       try{receiveSearch({query:outline.getSearchQuery()});}catch(error){report('Outliner search',error);}

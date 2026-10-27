@@ -1,6 +1,8 @@
 # MindMapOutliner
 
-Unpublished map features candidate: **Outliner1.12.3 / MindMap1.14.7 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+Expand to Level (Outliner 1.14.0): top More scopes depth to the current focused branch (anchor level 0, direct children level 1). Valid typing and arrow tap/hold/drag update immediately; Apply normalizes the displayed level once. Idle numbers describe actual visible expansion: exact patterns are bright, otherwise the equally weighted visible branch endpoint depths are averaged and rounded to the nearest integer (.5 upward), shown dim. Natural short leaves do not falsely dim an exact pattern. Active drafts/holds retain their value. A continuous typing or held adjustment shares one app Undo step. Invalid/composing drafts do not mutate. Deliberate accepted depth commands, including normalized no-ops, enable Sync Collapse; observation, manual changes and Undo/Redo never enable it or enforce depth. Physical-device acceptance of this revision is pending.
+
+Unpublished map features candidate: **Outliner1.14.0 / MindMap1.14.8 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
 
 Open `index.html` by double-clicking it. Keep these four files together: `index.html`, `outliner.js`, `mindmap.js`, `README.md`. No server, build, framework, bundler or installation is required. The complete Outliner is the source of truth; Mind Map is its live view. This folder is the entire upload package.
 
@@ -134,8 +136,8 @@ Edit the single commented `MODULES` block in `index.html`:
 
 ```js
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.12.3' },
-  mindmap: { src: './mindmap.js', v: '1.14.7' }
+  outliner: { src: './outliner.js', v: '1.14.0' },
+  mindmap: { src: './mindmap.js', v: '1.14.8' }
 };
 ```
 
@@ -566,3 +568,14 @@ Unpublished Outliner1.12.3 / MindMap1.14.6 / API1. Short left-aligned descriptio
 ### Separate title and description line spacing — 2026-10-25
 
 MindMap1.14.7 / API1 averages baseline gaps independently inside the title and description. The larger title no longer stretches description lines, and description lines cannot compress the title. The existing measured section endpoints and title/description separator remain; uniform spacing within each section retains the previously accepted Thai overlap tradeoff. This supersedes the old mixed-size whole-node average. Connector-aware horizontal alignment, explicit-only description breaks and search-close behavior are retained. Outliner1.12.3 is unchanged. Unpublished.
+
+## Optional expansion intent (Outliner 1.14.0, API1)
+
+Capability `expansion-level-event-v1` adds `on('expansionLevel', callback)`. A detached `{level: positiveInteger, source: 'adjust' | 'apply'}` is emitted synchronously once after each accepted explicit depth command, including a normalized no-op. Passive refresh, manual expansion, Undo/Redo, invalid/composing or denied actions emit none. Thrown/rejected subscribers are isolated; destroy clears subscriptions. Older compatible modules without this capability need no subscription. The shell uses one idempotent Sync Collapse setter and its existing persistence/projection/error pipeline; Sync Focus, pinning and map view are preserved. No new persistence key or instance method.
+
+Owner correction 2026-10-27: the Expand to Level label and number control always stay on one line, with no horizontal scrollbar. The menu keeps its intrinsic minimum width so the60px field,30.8px arrows and16px gap fit. At windows narrower than the menu, that minimum takes precedence over viewport containment; the supported346px pane floor and shell sizing are unchanged. Apply still spans the block below.
+
+
+## Metadata validation maintenance — 2026-10-27
+
+MindMap1.14.8 / API1 counts normalized source nodes once per metadata update, reusing the result across text, presentation and child-presence validation. The count is local to each call and is skipped when those metadata fields are absent. Validation order, rejection messages, atomic updates, drawing and all visible behavior are retained. Outliner1.14.0 is byte-identical. Unpublished; existing PDF/device acceptance limits remain.

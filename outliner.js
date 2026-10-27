@@ -1,4 +1,4 @@
-/* Outliner version 1.12.3 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.14.0 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -344,6 +344,21 @@ const presentationCSS=String.raw`
 .moa-outliner .size-stepper input::-webkit-inner-spin-button,.moa-outliner .size-stepper input::-webkit-outer-spin-button{-webkit-appearance:none}
 .moa-outliner #ol-menu #ol-size-reset{width:52px;flex:0 0 52px;padding:0;text-align:center;border:1px solid var(--line);background:var(--btn)}
 `;
+const depthCSS = String.raw`
+.moa-outliner #ol-topMenu{min-width:max-content;width:max-content}
+.moa-outliner .depth-controls{margin:4px 10px;padding-bottom:4px;font-size:14px}
+.moa-outliner .depth-row{display:flex;align-items:center;gap:16px;min-height:40px}
+.moa-outliner .depth-row>label{flex:none;white-space:nowrap}
+.moa-outliner .depth-stepper{display:flex;flex:0 0 123.6px;width:123.6px;height:40px;border:1px solid var(--line);border-radius:6px;background:var(--btn);overflow:hidden;min-width:0}
+.moa-outliner #ol-topMenu .depth-stepper button{width:30.8px;min-width:30.8px;flex:0 0 30.8px;padding:0;text-align:center;font-size:20px;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.moa-outliner .depth-stepper input{width:60px;min-width:60px;flex:0 0 60px;padding:0 4px;border:0;background:none;color:var(--ink);text-align:center;font:13px 'Cascadia Code',monospace;-moz-appearance:textfield}
+.moa-outliner .depth-stepper input::-webkit-inner-spin-button,.moa-outliner .depth-stepper input::-webkit-outer-spin-button{-webkit-appearance:none}
+.moa-outliner .depth-stepper input.depth-mismatch{color:var(--mute)}
+.moa-outliner #ol-topMenu .depth-controls button:disabled,.moa-outliner .depth-stepper input:disabled{opacity:.5;cursor:default}
+.moa-outliner .depth-status{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.moa-outliner #ol-topMenu .depth-apply{width:100%;min-height:40px;margin-top:12px;padding:6px 10px;text-align:center;background:var(--btn);color:var(--ink);border:1px solid var(--line);border-radius:6px}
+.moa-outliner .depth-feedback{padding:4px 0;color:var(--ink)}
+`;
 const paneCSS = String.raw`
 .moa-outliner.pane-controls .pane-actions{display:flex;flex:none;gap:0;align-items:center;order:0}
 .moa-outliner.pane-controls .pane-actions>#ol-moreBtn{order:0}
@@ -436,7 +451,10 @@ const template = String.raw`<div class="page">
      Export Visible exports only bullets that are currently expanded, never the children hidden by a collapsed bullet. -->
 <!-- Owner override 2026-10-16 (R12-3A): Clear All first; then separated style, expand/collapse and export groups. Historical REQUIREMENT above is retained verbatim. -->
 <!-- Latest owner override 2026-10-16 (V1.1): styles first; Clear All last after a separator. Supersedes the earlier Clear-All-first override retained above. -->
-<div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
+<!-- Owner-approved 2026-10-26: focused-branch Expand to level follows Collapse All; target/live stay private to this menu. -->
+<!-- Latest owner override: Expand to Level applies intentional valid adjustments immediately; no Apply or optional live mode. -->
+<!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
+<div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
 <div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
@@ -554,12 +572,13 @@ function ownsHistoryKey(e) {
   if (historyNativeContext) return false;
   return historyCallback('ownsKey', e);
 }
+let depthController = null;
 let destroyed = false, resizeObserver = null, lastOwnedInteraction = false, historyShortcutOwned = false;
 const timers = new Set(), frames = new Set(), listeners = new WeakMap(), globalListeners = [];
 const hadHostClass = container.classList.contains('moa-outliner');
 container.classList.add('moa-outliner');
 if (ipadSafari) container.classList.add('ipad-safari');
-const style = document.createElement('style'); style.textContent = presentationCSS + css + descriptionCSS + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
+const style = document.createElement('style'); style.textContent = presentationCSS + depthCSS + css + descriptionCSS + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
 const fragment = document.createElement('template'); fragment.innerHTML = originalHeader + template;
 const ownedNodes = [...fragment.content.childNodes];
 container.append(style, fragment.content);
@@ -598,14 +617,14 @@ listen(container, 'compositionstart', () => { historyComposing = true; }, true);
 listen(container, 'compositionend', () => { historyComposing = false; }, true);
 function ownsEvent(e, historyShortcut = false) {
   if (!visibleHost()) return false;
-  if (headerSlot?.contains(e.target) || e.target?.closest?.('#ol-menu input')) return false;
+  if (headerSlot?.contains(e.target) || e.target?.closest?.('#ol-menu input,.depth-controls')) return false;
   if (container.contains(e.target)) return true;
   const a = document.activeElement, neutral = n => n === document.body || n === document.documentElement || n === null;
   return lastOwnedInteraction && (sel.size > 0 || (historyShortcut && historyShortcutOwned)) && neutral(e.target) && neutral(a) && !e.target?.isContentEditable;
 }
 function destroy() {
   if (destroyed) return;
-  endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
+  depthController?.dispose();endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
   frames.forEach(id => window.cancelAnimationFrame(id)); frames.clear();
@@ -629,7 +648,7 @@ function destroy() {
 }
 
 // Integration API only. Original persistence/history and editing decisions remain below.
-const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus', 'search'].map(event => [event, new Set()]));
+const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus', 'search', 'expansionLevel'].map(event => [event, new Set()]));
 let publicationReady = false, publicationQueued = false, changeTimer = null, revision = 0;
 let immediateSnapshot, observedTree, publishedTree;
 const transientToggles = new Map();
@@ -647,7 +666,7 @@ function getSnapshot(options = {}) {
   return { zoomId: zoom === root ? null : zoom.id, tree };
 }
 function on(event, fn) {
-  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom, paneAction, pinFocus or search and a callback');
+  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom, paneAction, pinFocus, search or expansionLevel and a callback');
   if (destroyed) return () => {};
   subscribers.get(event).add(fn);
   return () => subscribers.get(event).delete(fn);
@@ -655,7 +674,7 @@ function on(event, fn) {
 function emit(event, payload) {
   for (const fn of [...subscribers.get(event)]) {
     if (destroyed) break;
-    try { if(event==='search'){const result=fn({...payload});if(result&&typeof result.then==='function')Promise.resolve(result).catch(()=>{});continue;} fn(event === 'toggle' ? { changes: payload.changes.map(c => ({ ...c })), transient: payload.transient } : { ...payload }); } catch (error) { /* A subscriber cannot interrupt editing or other subscribers. */ }
+    try { if(event==='search'||event==='expansionLevel'){const result=fn({...payload});if(result&&typeof result.then==='function')Promise.resolve(result).catch(()=>{});continue;} fn(event === 'toggle' ? { changes: payload.changes.map(c => ({ ...c })), transient: payload.transient } : { ...payload }); } catch (error) { /* A subscriber cannot interrupt editing or other subscribers. */ }
   }
 }
 let paneMode = 'split';
@@ -668,7 +687,7 @@ function setPaneMode(mode) {
     button.title = mode === 'full' ? (integratedHeader ? 'Shrink Outliner' : 'Minimize Outliner') : 'Expand Outliner';
     button.setAttribute('aria-label', button.title);
   }
-  container.querySelectorAll('.menu').forEach(menu => menu.classList.remove('show'));
+  depthController?.close();container.querySelectorAll('.menu').forEach(menu => menu.classList.remove('show'));
   paneMode = mode;
   if (integratedHeader) container.classList.toggle('pane-full', mode === 'full');
 }
@@ -698,7 +717,7 @@ if (opts.paneControls) {
     button.setAttribute('aria-label', button.title);
     listen(button, 'click', () => {
       if (integratedHeader && (!button.getClientRects().length || action === 'toggle' && paneMode === 'full' && !container.classList.contains('narrow-portrait'))) return;
-      container.querySelectorAll('.menu').forEach(menu => menu.classList.remove('show'));
+      depthController?.close();container.querySelectorAll('.menu').forEach(menu => menu.classList.remove('show'));
       emit('paneAction', { action });
     });
     group.append(button);
@@ -827,7 +846,7 @@ function appendHistory(entry) {
   hi = hist.length - 1;
 }
 let typingSnapshot = null,adjustment=null,adjustmentSaveTimer=null;
-function endAdjustment(token){if(token&&adjustment?.token!==token)return;adjustment=null;clearTimeout(adjustmentSaveTimer);adjustmentSaveTimer=null;flushSave();}
+function endAdjustment(token){if(token&&adjustment?.token!==token)return;depthController?.endTransaction();adjustment=null;clearTimeout(adjustmentSaveTimer);adjustmentSaveTimer=null;flushSave();}
 function beginAdjustment(kind){
   endAdjustment();if(historyComposing||destroyed)return null;
   if(historyHost&&!historyCallback('beforeCommand','adjustment'))return null;
@@ -877,6 +896,7 @@ function detachedHostValue(value) {
   return copy;
 }
 function commitHostHistory(edge) {
+  depthController?.finishGesture();
   if (!historyHost || destroyed || !container.isConnected || historyBusy || historyComposing || historyPreparing && historyPreparedCommit) return false;
   // A finished hold cannot append a new edge after Undo or another command.
   if(edge.adjustmentToken&&edge.adjustmentToken!==adjustment?.token)return false;
@@ -901,6 +921,7 @@ function commitHostHistory(edge) {
   } finally { historyBusy = false; if(adjustment)adjustment.writing=false; }
 }
 function runHistory(direction) {
+  depthController?.invalidate();
   endAdjustment();
   if (!historyHost || destroyed || !container.isConnected || historyBusy || historyPreparing || historyComposing || !['undo', 'redo'].includes(direction)) return false;
   historyPreparing = true; historyPreparedCommit = false;
@@ -939,6 +960,7 @@ function flushSave() {
   }
 }
 function save(typing) {
+  depthController?.reconcile();
   if(adjustment?.writing){if(!adjustmentSaveTimer)adjustmentSaveTimer=setTimeout(()=>{adjustmentSaveTimer=null;flushSave();},50);}else flushSave();
   if (typing) { typingSnapshot = snap(); clearTimeout(tm); tm = setTimeout(record, 500); } else record();
   schedulePublication();
@@ -955,8 +977,8 @@ function restore(i) {
   const a = viewOnly || ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement(); render(a && a.dataset && a.dataset.id ? +a.dataset.id : null);
   reconcilePresentationMenu();
 }
-function undo() { endAdjustment(); if (tm) record(); if (hi > 0) restore(--hi); }
-function redo() { endAdjustment(); if (tm) record(); if (hi < hist.length - 1) restore(++hi); }
+function undo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi > 0) restore(--hi); }
+function redo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi < hist.length - 1) restore(++hi); }
 
 // Parser for the seed text and for pasted text (pre-existing behaviour): indented lines, optional bullet markers, also WorkFlowy exports. Multi-line paste rebuilds the tree.
 function parseOutline(text) {
@@ -995,7 +1017,7 @@ function computeSets() {
   w(zoom);
 }
 const isOpen = n => searching() ? (sOver.has(n) ? sOver.get(n) : sAnc.has(n)) : n.open;
-const setNodeOpen = (n, o) => { const before = isOpen(n), transient = searching(); if (searching()) sOver.set(n, o); else n.open = o; observeToggle(n, before, isOpen(n), transient); };
+const setNodeOpen = (n, o) => { const before = isOpen(n), transient = searching(); if(n.children.length&&before!==o)depthController?.invalidate(); if (searching()) sOver.set(n, o); else n.open = o; observeToggle(n, before, isOpen(n), transient); };
 function shownKids(n) {
   if (!searching()) return n === zoom || n.open ? n.children : [];
   if (n !== zoom && !isOpen(n)) return [];
@@ -1254,6 +1276,7 @@ function blurOutlineText() {
 function navigate(n) {
   blurOutlineText();
   if (n === zoom) return;
+  depthController?.invalidate();
   record(); zoom = n; render();
 }
 // REQUIREMENT (breadcrumb abbreviation), in this order:
@@ -1568,15 +1591,15 @@ function syncMenuActions(){
 function openMenu(n, b) {
   numericBindings.forEach(b=>b.finish());commitSize();menuNode = n;sizeDirty=false;sizeInclude=false;sizeScope.checked=false;syncPresentationMenu(); menuT = sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
   syncMenuActions();
-  topMenu.classList.remove('show'); positionMenu(menu, r);
+  depthController?.close();topMenu.classList.remove('show'); positionMenu(menu, r);
 }
 const setOpen = (n, o) => { if (n.children.length) setNodeOpen(n, o); n.children.forEach(c => setOpen(c, o)); };
 menu.onclick = e => {
   const a = e.target.dataset.a; if (!a) return;numericBindings.forEach(b=>b.finish());if(a==='spacer'||a==='removeSpacer'){presentationCommand(a);return;} menu.classList.remove('show');
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
-  else if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
+  else if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { depthController?.invalidate(); menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
 };
-listen(document, 'click', e => { if (menu.classList.contains('show') && !menu.contains(e.target)) menu.classList.remove('show'); if (topMenu.classList.contains('show') && !topMenu.contains(e.target)) topMenu.classList.remove('show'); });
+listen(document, 'click', e => { if (menu.classList.contains('show') && !menu.contains(e.target)) menu.classList.remove('show'); if (topMenu.classList.contains('show') && !topMenu.contains(e.target)) {depthController?.close();topMenu.classList.remove('show');} });
 
 function keys(e, n, t) {
   // Keys pressed while an IME is composing belong to the IME (they confirm the text); line breaks from soft keyboards arrive via beforeinput.
@@ -1698,7 +1721,7 @@ async function copyText(s) {
 async function exportText(list, visible) { const s = toText(list, visible); toast(!s ? 'Nothing to export' : (await copyText(s)) ? 'Copied to clipboard' : 'Copy failed'); }
 // Escape closes whichever menu is open (top menu or bullet menu).
 listen(document, 'keydown', e => { if (!ownsEvent(e)) return; if (e.key === 'Escape') { topMenu.classList.remove('show'); menu.classList.remove('show'); } });
-function setAll(open) { (function w(n) { n.children.forEach(c => { if (c.children.length) setNodeOpen(c, open); w(c); }); })(zoom); render(); }
+function setAll(open) { depthController?.invalidate(); (function w(n) { n.children.forEach(c => { if (c.children.length) setNodeOpen(c, open); w(c); }); })(zoom); render(); }
 // Measure actual menu height; long menus remain reachable in a short visual viewport.
 function positionMenu(target, anchor, top = false) {
   const v = window.visualViewport, left = v ? v.offsetLeft : 0, y = v ? v.offsetTop : 0;
@@ -1711,10 +1734,206 @@ function positionMenu(target, anchor, top = false) {
   target.style.top = Math.max(y + margin, Math.min(anchor.bottom + (top ? 4 : 0), y + height - r.height - margin)) + 'px';
 }
 const topMenu = container.querySelector('#ol-topMenu'), moreBtn = container.querySelector('#ol-moreBtn');
+// Owner-approved immediate depth actions; target/draft state never enters history.
+// Idle depth is derived; only deliberate commands normalize expansion and publish intent.
+function createDepthController(){
+  const block=topMenu.querySelector('.depth-controls'),input=block.querySelector('input[type="number"]');
+  const status=block.querySelector('.depth-status'),feedback=block.querySelector('.depth-feedback'),apply=block.querySelector('.depth-apply'),bindings=[];
+  let target=1,dirty=false,composing=false,writing=false,held=false,disposed=false;
+  let scopeId=null,session=null,epoch=0,compositionContext=null,suppressInput=false,acceptedDraft=null,compositionTail=null;
+  const available=()=>!disposed&&!destroyed&&visibleHost()&&!searching()&&!historyComposing&&!composing&&(zoom===root||par.has(zoom));
+  function realChildren(node){
+    return node===phOwner&&node.children.length===1&&node.children[0]===phNode&&!phNode.text&&!phNode.children.length?[]:node.children;
+  }
+  // Reachability determines visible match; every real descendant contributes to normalization.
+  function analyze(level){
+    let max=0,maxVisible=0,endpointSum=0,endpointCount=0,deepestOpen=0,shallowestClosed=Infinity;const changes=[],stack=zoom===root||par.has(zoom)?[{node:zoom,depth:0,reachable:true}]:[];
+    while(stack.length){
+      const {node,depth,reachable}=stack.pop(),children=realChildren(node);
+      if(depth){
+        max=Math.max(max,depth);
+        if(reachable){maxVisible=Math.max(maxVisible,depth);if(!children.length||!node.open){endpointSum+=depth;endpointCount++;}}
+        if(children.length){
+          const open=depth<level;
+          if(node.open!==open)changes.push({node,open});
+          if(reachable){if(node.open)deepestOpen=Math.max(deepestOpen,depth);else shallowestClosed=Math.min(shallowestClosed,depth); }
+        }
+      }
+      const nextReachable=reachable&&(depth===0||node.open);
+      for(let i=children.length-1;i>=0;i--)stack.push({node:children[i],depth:depth+1,reachable:nextReachable});
+    }
+    const exact=max>0&&maxVisible>deepestOpen&&maxVisible<=shallowestClosed;
+    const observed=exact?maxVisible:max?Math.max(1,Math.min(max,Math.floor(endpointSum/endpointCount+.5))):1;
+    return{max,observed,exact,match:max>0&&level>deepestOpen&&level<=shallowestClosed,changes};
+  }
+  // Only an active adjustment needs a structural baseline; idle edits never scan it.
+  function structure(){
+    const ids=[],stack=[root];
+    while(stack.length){const node=stack.pop(),children=realChildren(node);ids.push(node.id,children.length);for(let i=children.length-1;i>=0;i--)stack.push(children[i]);}
+    return ids.join(',');
+  }
+  function finishGesture(end=true){
+    const previous=session;session=null;held=false;
+    bindings.forEach(binding=>binding.finish());
+    if(end&&previous&&adjustment?.token===previous.token)endAdjustment(previous.token);
+  }
+  function clearFeedback(){feedback.textContent='';feedback.hidden=true;input.removeAttribute('aria-invalid');}
+  function discard(){dirty=false;acceptedDraft=null;input.value=String(target);clearFeedback();}
+  function stop(){epoch++;compositionContext=null;compositionTail=null;finishGesture();discard();}
+  function draftValue(max){
+    const text=input.value.trim(),value=/^[0-9]+$/.test(text)?Number(text):NaN;
+    return !input.validity.badInput&&Number.isSafeInteger(value)&&value>=1&&value<=max?value:null;
+  }
+  function refresh(state){
+    if(!root||disposed)return;
+    if(scopeId!==zoom.id){stop();scopeId=zoom.id;state=null;}
+    state=state||analyze(target);
+    const active=dirty||composing||held||session||writing;
+    if(!active&&!searching())target=state.observed;
+    if(!dirty&&!composing)input.value=String(target);
+    input.max=String(Math.max(1,state.max));
+    const disabled=searching()||!state.max;
+    input.disabled=apply.disabled=disabled;
+    const valid=!composing&&(!dirty||draftValue(state.max)===target),match=!disabled&&valid&&(active?state.match:state.exact);
+    input.classList.toggle('depth-mismatch',!disabled&&!match);
+    for(const [id,direction]of [['ol-depth-down',-1],['ol-depth-up',1]])block.querySelector('#'+id).disabled=disabled||(!dirty&&(direction<0?target<=1:target>=state.max));
+    status.textContent=disabled?(searching()?'Clear search to adjust expansion depth.':'No expansion levels in this branch.'):
+      !valid?'Editing expansion depth. Enter a valid whole level.':match?'Expansion matches level '+target+'.':'Approximate expansion level '+target+'. Apply to make expansion uniform.';
+    input.title=status.textContent;
+    const reason=disabled?status.textContent:'';
+    if(!input.hasAttribute('aria-invalid')){feedback.textContent=reason;feedback.hidden=!reason;}
+  }
+  function reconcile(){
+    if(disposed||!root)return;
+    if(scopeId!==zoom.id){stop();scopeId=zoom.id;}
+    if(session&&!writing&&session.baseline!==structure())stop();
+    if(session||writing||topMenu.classList.contains('show'))refresh();
+  }
+  function invalidate(){stop();}
+  // All writes use the shared outline adjustment transaction, including a typing session.
+  function command(kind,source='adjust'){
+    if(!available()||scopeId!==zoom.id||!topMenu.classList.contains('show'))return false;
+    if(session&&(adjustment?.token!==session.token||session.scope!==zoom.id))return false;
+    const level=target;
+    let state=analyze(level);if(!state.max||level<1||level>state.max)return false;
+    if(!state.changes.length){refresh(state);emit('expansionLevel',{level,source});return true;}
+    if(!session){
+      const context=epoch,scope=zoom.id,baseline=structure(),token=beginAdjustment('outline');
+      if(!token){toast('Expansion depth could not be applied');refresh();return false;}
+      if(!available()||context!==epoch||scope!==zoom.id||!topMenu.classList.contains('show')||adjustment?.token!==token||baseline!==structure()){endAdjustment(token);refresh();return false;}
+      session={token,scope,baseline};
+      state=analyze(level); // Host settlement may replace the tree; resolve objects again.
+      if(level>state.max){finishGesture();refresh();return false;}
+      target=level;
+    }
+    const token=session.token;
+    adjustment.writing=true;writing=true;
+    try{
+      for(const change of state.changes)change.node.open=change.open;
+      render();
+    }finally{writing=false;if(adjustment?.token===token)adjustment.writing=false;}
+    if(kind==='tap')finishGesture();
+    refresh();emit('expansionLevel',{level,source});return true;
+  }
+  function commitDraft(report=true,explicit=false){
+    if(composing||historyComposing)return false;
+    if(!explicit&&(!dirty||acceptedDraft===input.value))return true;
+    const max=analyze(target).max,value=draftValue(max);
+    if(value===null){
+      if(report){input.setAttribute('aria-invalid','true');feedback.textContent='Enter a whole level from 1 to '+Math.max(1,max);feedback.hidden=false;}
+      refresh();return false;
+    }
+    target=value;clearFeedback();
+    const accepted=command('typing');if(accepted)acceptedDraft=input.value;return accepted;
+  }
+  function settle(explicit=false){
+    if(!commitDraft(true,explicit))return false;
+    finishGesture();discard();refresh();return true;
+  }
+  function close(cancel=false){
+    if(cancel||composing){stop();refresh();}
+    else if(!settle()){stop();refresh();toast('Invalid expansion level discarded');}
+  }
+  function boundary(e){
+    if(e.target===input)return;
+    if(e.type==='keydown'&&!['Enter',' ','ArrowUp','ArrowDown'].includes(e.key))return;
+    if(composing||historyComposing||e.isComposing||e.keyCode===229){e.preventDefault();e.stopImmediatePropagation();return;}
+    if(e.type==='pointerdown')e.preventDefault(); // Capture Apply/settle before browser blur/change.
+    if(e.target===apply)return;
+    if(!settle()){e.preventDefault();e.stopImmediatePropagation();}
+  }
+  listen(block,'pointerdown',boundary,true);listen(block,'keydown',boundary,true);
+  listen(apply,'click',e=>{
+    e.preventDefault();
+    if(!available())return;
+    const value=dirty?draftValue(analyze(target).max):target;
+    if(value===null){commitDraft();return;}
+    finishGesture();discard();target=value;command('tap','apply');
+  });
+  listen(input,'input',e=>{
+    if(suppressInput){suppressInput=false;discard();refresh();return;}
+    // Some engines deliver the final composition input after compositionend.
+    const tail=compositionTail;compositionTail=null;
+    if(tail!==null&&input.value===tail&&(!e.inputType||['insertFromComposition','insertCompositionText'].includes(e.inputType))){refresh();return;}
+    dirty=true;acceptedDraft=null;clearFeedback();
+    if(!composing&&!e.isComposing&&e.keyCode!==229)commitDraft(false);
+    refresh();
+  });
+  listen(input,'focus',()=>{suppressInput=false;compositionTail=null;refresh();});
+  listen(input,'compositionstart',()=>{finishGesture();acceptedDraft=null;compositionTail=null;composing=true;compositionContext={epoch,scope:zoom.id};refresh();});
+  listen(input,'compositionend',()=>{
+    const context=compositionContext;compositionContext=null;composing=false;
+    if(context&&context.epoch===epoch&&context.scope===zoom.id&&topMenu.classList.contains('show')&&available()){
+      dirty=true;if(commitDraft(false))compositionTail=input.value;
+    }else{suppressInput=true;discard();}
+    refresh();
+  });
+  listen(input,'change',()=>{if(!composing)settle();});
+  listen(input,'blur',()=>{if(composing)close(true);else if(!settle()){stop();toast('Invalid expansion level discarded');}});
+  listen(input,'keydown',e=>{
+    if(e.key==='Enter'&&!composing&&!e.isComposing&&e.keyCode!==229){e.preventDefault();if(!settle(true))e.stopPropagation();}
+    // Native spinner/wheel changes bypass the approved gesture and commit rules.
+    if(e.key==='ArrowUp'||e.key==='ArrowDown')e.preventDefault();
+  });
+  listen(input,'wheel',e=>e.preventDefault(),{passive:false});
+  function cancelInteraction(){if(session||dirty||composing||held){stop();refresh();}}
+  listen(window,'blur',cancelInteraction);
+  listen(document,'visibilitychange',()=>{if(document.hidden)cancelInteraction();});
+  for(const [id,direction]of [['ol-depth-down',-1],['ol-depth-up',1]]){
+    const button=block.querySelector('#'+id);
+    bindings.push(createNumericStepper({button,direction,scale:false,read:()=>target,bounds:()=>({min:1,max:Math.max(1,analyze(target).max)}),
+      allowed:()=>available()&&topMenu.classList.contains('show')&&(!session||session.token===adjustment?.token)&&scopeId===zoom.id,
+      step:(sign=direction,count=1)=>{
+        if(!commitDraft())return;
+        target=Math.max(1,Math.min(analyze(target).max,target+sign*count));
+        command(held?'gesture':'tap');refresh();
+      },
+      start:()=>{if(!commitDraft())return false;discard();held=true;return true;},
+      finish:()=>{finishGesture();refresh();}
+    }));
+  }
+  // Commands that replace scope/history cancel unaccepted drafts before focus/blur effects.
+  listen(document,'pointerdown',e=>{
+    if(disposed||!topMenu.classList.contains('show')||block.contains(e.target))return;
+    const cancelling=e.target.closest('#ol-undoBtn,#ol-redoBtn,#ol-inBtn,#ol-outBtn,#ol-qIn,#ol-qx,#ol-crumbs,.bullet,.arrow,.dots,[data-a="clearAll"],[data-a="expandAll"],[data-a="collapseAll"]');
+    if(cancelling)stop();
+    else if(!topMenu.contains(e.target))close();
+  },true);
+  listen(document,'keydown',e=>{
+    if(e.key==='Escape'&&topMenu.classList.contains('show')&&container.contains(e.target)&&!e.isComposing&&e.keyCode!==229&&!composing){
+      close(true);topMenu.classList.remove('show');e.preventDefault();e.stopImmediatePropagation();input.blur();
+    }
+  },true);
+  return{refresh,reconcile,invalidate,close,finishGesture:stop,endTransaction(){if(session){epoch++;compositionContext=null;finishGesture(false);discard();}},
+    dispose(){stop();disposed=true;bindings.forEach(binding=>binding.dispose());}
+  };
+}
+depthController=createDepthController();
+
 moreBtn.onclick = e => {
   e.stopPropagation(); menu.classList.remove('show');
-  if (topMenu.classList.contains('show')) topMenu.classList.remove('show');
-  else positionMenu(topMenu, moreBtn.getBoundingClientRect(), true);
+  if (topMenu.classList.contains('show')) {depthController.close();topMenu.classList.remove('show');}
+  else {depthController.refresh();positionMenu(topMenu, moreBtn.getBoundingClientRect(), true);}
 };
 topMenu.onclick = e => {
   const a = e.target.dataset.a; if (!a) return; topMenu.classList.remove('show');
@@ -1728,7 +1947,7 @@ topMenu.onclick = e => {
 
 // Clear the complete Home tree, with one history entry even after recent typing.
 function clearAll() {
-  record();
+  depthController?.invalidate();record();
   root.children.length = 0; zoom = root; phNode = phOwner = null;
   sel.clear(); anchor = cursor = null;
   saveBlocked = false;
@@ -1897,6 +2116,7 @@ function syncSearchAction() {
 function startSearch(v) {
   v = v.trim(); if (!v) { endSearch(); return; }
   const changed=sq!==v;
+  depthController?.invalidate();
   sq = v; sOver.clear(); sKeep.clear(); sel.clear(); qBox.classList.add('on'); qIn.blur(); syncSearchAction(); render();
   if(changed)emit('search',{query:sq});
 }
@@ -2073,5 +2293,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.12.3', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.14.0', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
