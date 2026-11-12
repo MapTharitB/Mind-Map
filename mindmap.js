@@ -1,4 +1,4 @@
-/* MindMap 1.14.8 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.14.9 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -144,7 +144,7 @@ function safeFileName(label){
 }
 
 const C={
-  BASE_FONT:10,RATIO:DEFAULT_BRANCH_SCALE,LINE_H:1.5,DESC_GAP_R:0.25,
+  BASE_FONT:10,LINE_H:1.5,DESC_GAP_R:0.25,
   GAP_R:0.75,SUB_GAP_R:0.20125,CHILD_STEP_R:0.85,RISE_PAD_R:0.70,LOWER_THAI_CHILD_R:1.5,LOWER_THAI_FANOUT_FRAC:0.5,
   D0_D1_GAP_MULT:1.145,D1_TXT_PAD_R:0.105,
   D1_ROW_GAP_R:0.195,SIBLING_GAP_R:0.135,D1_ARM_FLOOR_R:0.5,
@@ -285,8 +285,8 @@ function inkMetrics(text,fs,fw){
 // Search highlights retain grapheme boundaries for Thai marks.
 const descriptionGraphemes=typeof Intl.Segmenter==='function'?new Intl.Segmenter('th',{granularity:'grapheme'}):null;
 function descriptionSize(node,MD){
-  // Preserve the original arithmetic at the default scale, including its minimum.
-  return (layoutPreferences.branchScale===DEFAULT_BRANCH_SCALE?fsz(node.depth+2,MD):node.baseFs/(C.RATIO*C.RATIO))*(node.mapSize??1);
+  const child=node.children.find(ch=>ch.kind!=='spacer');
+  return 0.75*fsz(node.depth+1,MD)*(child?.mapSize??node.mapSize??1);
 }
 // Halve free interline whitespace; measured Thai/Latin ink retains its existing safety gap.
 function textLineAdvance(previous,ink,fs){
@@ -828,6 +828,20 @@ function contentBounds(lay){
 }
 
 /* ══ CONNECTION SEGMENTS ══ */
+// Match the original bus rule: interior stems only, with a clear nearest candidate.
+function snappedStem(center,centers,upperLength,lowerLength){
+  const candidates=[];
+  for(let i=1;i<centers.length-1;i++){
+    const distance=Math.abs(centers[i]-center);
+    if(distance<Math.min(upperLength,lowerLength(i)))candidates.push({i,distance});
+  }
+  candidates.sort((a,b)=>a.distance-b.distance);
+  const [first,second]=candidates;
+  if(!first)return -1;
+  if(centers.length%2===0&&second&&
+    (second.distance-first.distance)/Math.max(second.distance,0.001)<=SNAP_AMBIG_THRESH)return -1;
+  return first.i;
+}
 function getConnSegments(lay){
   if(lay.trees)return lay.trees.flatMap(getConnSegments);
   const{root,MD,d1Mode,d1BusY,d1ColX,d1Groups,d1Cols,d1X0}=lay;
@@ -843,10 +857,17 @@ function getConnSegments(lay){
       const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(familyGap(p,depth,MD),gap*0.3);
       const clearance=p.subtree.customSize?familyWidth(p,depth,MD)/2+1e-9:0;
       const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+titleWidth(p)/2,lw=familyWidth(p,depth,MD);
-      seg(p.col,lw,center,start,center,bus);
       const centers=children.map(ch=>ch.x+titleWidth(ch)/2);
+      const ends=children.map(ch=>{
+        const y=inkTop(ch);
+        return y-Math.max(clearance,Math.min(familyGap(p,depth,MD),(y-bus)*0.3));
+      });
+      const idx=snappedStem(center,centers,bus-start,i=>ends[i]-bus);
+      const stem=idx<0?center:(center+centers[idx])/2;
+      if(idx>=0)centers[idx]=stem;
+      seg(p.col,lw,stem,start,stem,bus);
       seg(p.col,lw,centers[0],bus,centers[centers.length-1],bus);
-      children.forEach((ch,i)=>seg(p.col,lw,centers[i],bus,centers[i],inkTop(ch)-Math.max(clearance,Math.min(familyGap(p,depth,MD),(inkTop(ch)-bus)*0.3))));
+      children.forEach((ch,i)=>seg(p.col,lw,centers[i],bus,centers[i],ends[i]));
       children.forEach(subSegs);return;
     }
     const sx=spineXOf(p);
@@ -870,22 +891,11 @@ function getConnSegments(lay){
       const rg=Math.min(familyGap(root,d1[0].depth,MD),d1BaseGap*0.3);
       const rb=by-(d1BaseGap-rg)*C.BUS_MID;
       const upperLen=by-rb;
-      let topX=root.cx,snapIdx=-1;
-      if(d1.length>=3){
-        const _sd=[];
-        for(let i=1;i<d1.length-1;i++){
-          const n=d1[i],dg=Math.min(familyGap(root,d1[0].depth,MD),(n.y-by)*0.3);
-          const dist=Math.abs(n.cx-root.cx);
-          if(dist<Math.min(upperLen,(n.y-dg)-by))_sd.push({i,dist});
-        }
-        if(_sd.length){
-          _sd.sort((a,b)=>a.dist-b.dist);
-          const _ambig=d1.length%2===0&&_sd.length>=2&&
-            (_sd[1].dist-_sd[0].dist)/Math.max(_sd[1].dist,0.001)<=SNAP_AMBIG_THRESH;
-          if(!_ambig)snapIdx=_sd[0].i;
-        }
-        if(snapIdx!==-1)topX=(d1[snapIdx].cx+root.cx)/2;
-      }
+      const snapIdx=snappedStem(root.cx,d1.map(n=>n.cx),upperLen,i=>{
+        const y=d1[i].y;
+        return (y-Math.min(familyGap(root,d1[0].depth,MD),(y-by)*0.3))-by;
+      });
+      const topX=snapIdx<0?root.cx:(d1[snapIdx].cx+root.cx)/2;
       const lw1=familyWidth(root,d1[0].depth,MD);
       seg(root.col,lw1,topX,rb,topX,by);
       if(d1.length>1)seg(root.col,lw1,d1[0].cx,by,d1[d1.length-1].cx,by);
@@ -1944,5 +1954,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.14.8',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.14.9',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
 })();

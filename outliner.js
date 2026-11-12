@@ -1,4 +1,4 @@
-/* Outliner version 1.14.0 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.14.2 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -203,7 +203,7 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
    The outline TEXT must stay at the same horizontal position as the original centred 1040px column: --gut is that column's old side margin
    (14px, or half of the width beyond 1040px). .sheet and .head add their old paddings on top of --gut.
    DO NOT put max-width or side padding back on .page or its children: that moves the scrollbar away from the app edge. */
-.moa-outliner{box-sizing:border-box;--gut:max(14px,(100% - 1040px) / 2);display:flex;flex-direction:column;min-height:0;container-type:inline-size;container-name:moa-outline}
+.moa-outliner{box-sizing:border-box;--text-right:max(12px,env(safe-area-inset-right,0px));--gut:max(14px,(100% - 1040px) / 2);display:flex;flex-direction:column;min-height:0;container-type:inline-size;container-name:moa-outline}
 .moa-outliner *,.moa-outliner *::before,.moa-outliner *::after{box-sizing:inherit}
 .moa-outliner .page{flex:1;min-height:0;display:flex;flex-direction:column;padding:12px 0 10px}
 .moa-outliner .page>*{width:100%}
@@ -225,13 +225,13 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
    The fade (0.18s) and the idle delay (450ms in JS) are deliberately fast: the owner asked for twice as fast as the first version.
    DO NOT switch to ::-webkit-scrollbar rules (Chrome ignores them once scrollbar-color is set) and DO NOT make the scrollbar always visible.
    .sheet is the scroll container and spans the full app width; its side padding uses --gut so the text does not move. */
-.moa-outliner .sheet{background:none;border:1px solid transparent;padding:16px calc(var(--gut) + 28px) 120px calc(var(--gut) + 88px);flex:1;min-height:0;overflow:auto;cursor:default;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .18s ease}
+.moa-outliner .sheet{background:none;border:1px solid transparent;padding:16px var(--text-right) 120px calc(var(--gut) + 88px);flex:1;min-height:0;overflow:auto;cursor:default;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .18s ease}
 /* REQUIREMENT: Indent, Outdent, Undo and Redo are minimal icon-only buttons (arrows and circular arrows), no text labels, no border until hover. */
 .moa-outliner .ic{background:none!important;border-color:transparent!important;color:var(--mute)!important;padding:3px 8px!important;font-size:18px!important;line-height:1.1}
 .moa-outliner .ic:hover{color:var(--ink)!important;border-color:var(--line)!important}
 /* REQUIREMENT (zoom title): the zoomed-in bullet is shown as a big editable heading above its children, aligned with the bullets.
    Its font size and weight are size level 0 (49px bold, see levelStyle()) in the two hierarchy modes, plain 16px in Plain Text mode; set by head(). Its line height is the shared textarea rule. */
-.moa-outliner .head{flex:none;display:none;padding:7.5px calc(var(--gut) + 28px) 6.5px calc(var(--gut) + 88px)}
+.moa-outliner .head{flex:none;display:none;padding:7.5px var(--text-right) 6.5px calc(var(--gut) + 88px)}
 /* Owner override 2026-10-16 (R12-3A): balance the complete title in the first-row slot.
    The focused sheet border adds 1px below: 7.5px above = 6.5px + 1px below.
    Total 15px plus the title's extra 2px preserves the Home child anchor (16px + 1px). */
@@ -319,11 +319,12 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
   .moa-outliner .tools{order:2;flex:1 1 100%;justify-content:center}
 }`;
 // R2 is opt-in; standalone hosts keep their original toolbar.
-// Latest owner exception: reserve a stable trailing badge column; scrollport alone clears the centered divider.
+// Latest owner exception: reserve the trailing column only for a visible badge; scrollport alone clears the centered divider.
 const presentationCSS=String.raw`
 .moa-outliner .page>.sheet{width:calc(100% - var(--outline-scrollport-inset,0px))}
-.moa-outliner .row>.tw,.moa-outliner .head>.tw{padding-right:58px;min-width:100px}
-.moa-outliner .tw>.hl{right:58px}
+.moa-outliner .row>.tw,.moa-outliner .head>.tw{min-width:42px}
+.moa-outliner .row>.tw.map-size-active,.moa-outliner .head>.tw.map-size-active{padding-right:58px;min-width:100px}
+.moa-outliner .tw.map-size-active>.hl{right:58px}
 .moa-outliner .map-size-badge{position:absolute;right:0;top:3px;width:54px;min-height:24px;text-align:center;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);font:12px/22px 'Cascadia Code',monospace;pointer-events:none}
 .moa-outliner .map-size-badge[hidden]{display:none}
 .moa-outliner .tw.map-size-active::before{content:"";position:absolute;left:-22px;right:0;top:0;height:max(var(--bh),var(--map-size-title-height,0px));border-radius:6px;background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
@@ -1097,6 +1098,15 @@ function updateBadge(host,n){
   host.classList.toggle('map-size-active',(n.mapSize??1)!==1);
   badge.textContent='×'+displayMapSize(n.mapSize??1).replace(/\.?0+$/,'');badge.hidden=(n.mapSize??1)===1;
 }
+function updateEditorBadge(binding,node){
+  if(!binding)return;
+  const hadBadge=binding.host.classList.contains('map-size-active');
+  updateBadge(binding.host,node);
+  if(hadBadge!==binding.host.classList.contains('map-size-active')){
+    fit(binding.title);
+    if(binding.description)fit(binding.description);
+  }
+}
 function focusEditor(binding, pos) {
   const n = binding.getNode(), p = pos == null ? n.text.length : Math.max(0, Math.min(pos, n.text.length)), parts = splitNodeText(n.text,n.titleLineCount);
   const desc = parts.hasDescription && p > parts.title.length, t = desc ? binding.description : binding.title, local = desc ? p - parts.title.length - 1 : p;
@@ -1190,10 +1200,13 @@ function bindField(binding, t) {
   listen(t, 'keydown', e => {
     if (composing || e.isComposing || e.keyCode === 229 || historyComposing) { soft = false; return; }
     if(binding.head&&(e.ctrlKey||e.metaKey)&&!e.altKey){const key=(e.code||e.key).toLowerCase();if(['keyz','z','keyy','y'].includes(key)&&boundaryHistory(key.endsWith('y')||e.shiftKey?'redo':'undo')){e.preventDefault();return;}}
-    soft = (e.key === 'Enter' || e.keyCode === 13) && !e.altKey && !e.metaKey && (e.shiftKey && !e.ctrlKey || e.ctrlKey && !e.shiftKey && t.dataset.role === 'description');
+    const enter = e.key === 'Enter' || e.keyCode === 13;
+    const descriptionEnter = enter && !e.altKey && !e.metaKey &&
+      ((e.ctrlKey && !e.shiftKey) || (ipadSafari && !e.ctrlKey && e.getModifierState?.('CapsLock')));
+    soft = descriptionEnter ? t.dataset.role === 'description' : enter && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
     const n = binding.getNode(), range = readEditorRange(n, t), parts = splitNodeText(n.text,n.titleLineCount), collapsed = range.start === range.end;
     if(!binding.head&&e.key==='Enter'&&e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){e.preventDefault();e.stopPropagation();presentationCommand('spacer',n);return;}
-    if (soft && e.ctrlKey) {
+    if (soft && descriptionEnter) {
       e.preventDefault();
       // Keep the active textarea's native Undo transaction when supported.
       let inserted=false;try{inserted=document.execCommand('insertText',false,'\n');}catch(_){}
@@ -1201,7 +1214,7 @@ function bindField(binding, t) {
       soft=false;return;
     }
     if (soft) return; // Native title/description LF; input recomputes the title boundary.
-    if ((e.key === 'Enter' || e.keyCode === 13) && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    if (descriptionEnter) {
       e.preventDefault();record();
       const tail=parts.title.slice(t.selectionEnd),description=tail+(parts.hasDescription?(tail?'\n':'')+parts.description:'');
       setNodeText(n,{title:parts.title.slice(0,t.selectionStart),description,hasDescription:true});
@@ -1525,7 +1538,8 @@ function presentationCommand(action,n=menuNode,value,reset=false){
     if(session)adjustment.writing=true;
     for(const change of changes){
       const node=change.node;promotePresentation(node);if(change.value===1)delete node.mapSize;else node.mapSize=change.value;
-      const binding=els.get(node)?.querySelector('.tw')?._nodeEditor;if(binding)updateBadge(binding.host,node);if(zoom===node&&headBinding)updateBadge(headBinding.host,node);
+      updateEditorBadge(els.get(node)?.querySelector('.tw')?._nodeEditor,node);
+      if(zoom===node)updateEditorBadge(headBinding,node);
     }
     save();if(session&&adjustment?.token===session.token)adjustment.writing=false;syncPresentationMenu();return true;
   }
@@ -2293,5 +2307,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.14.0', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.14.2', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

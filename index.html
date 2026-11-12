@@ -170,8 +170,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.14.0' },
-  mindmap: { src: './mindmap.js', v: '1.14.8' }
+  outliner: { src: './outliner.js', v: '1.14.2' },
+  mindmap: { src: './mindmap.js', v: '1.14.9' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, presentationSupported = true) {
@@ -655,7 +655,7 @@ function updateControlPlacement() {
     }
   }
   if(supports('chrome-occlusion','setChromeOcclusion'))mapCall('setChromeOcclusion',{left:edge,top:0,right:0,bottom:keyboard});
-  else host.style.setProperty('--map-chrome-visibility',covered?'hidden':'visible');
+  else if(map)host.style.setProperty('--map-chrome-visibility',covered?'hidden':'visible');
 }
 $('map-options').addEventListener('scroll',updateControlPlacement,{passive:true});
 document.querySelector('.map-controls').addEventListener('scroll',updateControlPlacement,{passive:true});
