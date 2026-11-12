@@ -1,4 +1,4 @@
-/* Outliner version 1.14.2 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.14.4 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -456,7 +456,7 @@ const template = String.raw`<div class="page">
 <!-- Latest owner override: Expand to Level applies intentional valid adjustments immediately; no Apply or optional live mode. -->
 <!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
 <div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
+<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
@@ -1112,6 +1112,21 @@ function focusEditor(binding, pos) {
   const desc = parts.hasDescription && p > parts.title.length, t = desc ? binding.description : binding.title, local = desc ? p - parts.title.length - 1 : p;
   if (!t) return; t.focus(); t.setSelectionRange(local, local);
 }
+function saveFieldCommand(binding) {
+  save();
+  if(binding.head&&typeof hist[hi]==='string')hist[hi]={outline:hist[hi],titleBoundary:binding.getNode().id};
+}
+function insertDescription(binding,start,end) {
+  const n=binding.getNode(), parts=splitNodeText(n.text,n.titleLineCount);
+  record();
+  const tail=parts.title.slice(end);
+  const description=tail+(parts.hasDescription?(tail?'\n':'')+parts.description:'');
+  setNodeText(n,{title:parts.title.slice(0,start),description,hasDescription:true});
+  refreshNodeEditor(binding);
+  focusEditor(binding,binding.title.value.length+1);
+  if(binding.head)crumbs();
+  saveFieldCommand(binding);
+}
 function bindField(binding, t) {
   const isBreak = e => e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph';
   let soft = false, composing = false, pendingBreak = null;
@@ -1150,7 +1165,6 @@ function bindField(binding, t) {
     if(match>=0)hi=match;
     flushSave();schedulePublication();
   };
-  const saveFieldCommand = () => {save();if(binding.head&&typeof hist[hi]==='string')hist[hi]={outline:hist[hi],titleBoundary:binding.getNode().id};};
   const boundaryHistory = direction => {
     if(!binding.head||composing||historyComposing)return false;
     const id=binding.getNode().id,edge=hist[direction==='undo'?hi:hi+1],current=outlineValue(hist[outlineHistoryIndex()]);
@@ -1201,8 +1215,7 @@ function bindField(binding, t) {
     if (composing || e.isComposing || e.keyCode === 229 || historyComposing) { soft = false; return; }
     if(binding.head&&(e.ctrlKey||e.metaKey)&&!e.altKey){const key=(e.code||e.key).toLowerCase();if(['keyz','z','keyy','y'].includes(key)&&boundaryHistory(key.endsWith('y')||e.shiftKey?'redo':'undo')){e.preventDefault();return;}}
     const enter = e.key === 'Enter' || e.keyCode === 13;
-    const descriptionEnter = enter && !e.altKey && !e.metaKey &&
-      ((e.ctrlKey && !e.shiftKey) || (ipadSafari && !e.ctrlKey && e.getModifierState?.('CapsLock')));
+    const descriptionEnter = enter && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey;
     soft = descriptionEnter ? t.dataset.role === 'description' : enter && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey;
     const n = binding.getNode(), range = readEditorRange(n, t), parts = splitNodeText(n.text,n.titleLineCount), collapsed = range.start === range.end;
     if(!binding.head&&e.key==='Enter'&&e.altKey&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey){e.preventDefault();e.stopPropagation();presentationCommand('spacer',n);return;}
@@ -1210,15 +1223,12 @@ function bindField(binding, t) {
       e.preventDefault();
       // Keep the active textarea's native Undo transaction when supported.
       let inserted=false;try{inserted=document.execCommand('insertText',false,'\n');}catch(_){}
-      if(!inserted){record();t.setRangeText('\n',t.selectionStart,t.selectionEnd,'end');writeField();refreshNodeEditor(binding);saveFieldCommand();}
+      if(!inserted){record();t.setRangeText('\n',t.selectionStart,t.selectionEnd,'end');writeField();refreshNodeEditor(binding);saveFieldCommand(binding);}
       soft=false;return;
     }
     if (soft) return; // Native title/description LF; input recomputes the title boundary.
     if (descriptionEnter) {
-      e.preventDefault();record();
-      const tail=parts.title.slice(t.selectionEnd),description=tail+(parts.hasDescription?(tail?'\n':'')+parts.description:'');
-      setNodeText(n,{title:parts.title.slice(0,t.selectionStart),description,hasDescription:true});
-      refreshNodeEditor(binding);focusEditor(binding,splitNodeText(n.text,n.titleLineCount).title.length+1);if(binding.head)crumbs();saveFieldCommand();return;
+      e.preventDefault();insertDescription(binding,t.selectionStart,t.selectionEnd);return;
     }
     if ((e.key === 'Enter' || e.keyCode === 13) && (e.altKey || e.shiftKey || e.ctrlKey || e.metaKey)) {e.preventDefault();return;}
     if ((e.key === 'Enter' || e.keyCode === 13) && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -1501,6 +1511,7 @@ function promotePresentation(n){if(n===phNode){phNode=phOwner=null;}}
 function syncPresentationMenu(){
   if(!menuNode)return;const value=menuNode.mapSize??1;if(!sizeDirty&&!sizeComposing)sizeInput.value=displayMapSize(value);
   container.querySelector('#ol-size-down').disabled=value<=MIN_MAP_SIZE;container.querySelector('#ol-size-up').disabled=value>=MAX_MAP_SIZE;
+  menu.querySelector('[data-a="description"]').hidden=menuNode.kind==='spacer'||splitNodeText(menuNode.text,menuNode.titleLineCount).hasDescription;
   menu.querySelector('[data-a="removeSpacer"]').hidden=menuNode.kind!=='spacer';
   menu.querySelector('[data-a="spacer"]').textContent=canMarkSpacer(menuNode)?'Mark as Spacer':'Insert Spacer Below';
 }
@@ -1610,6 +1621,14 @@ function openMenu(n, b) {
 const setOpen = (n, o) => { if (n.children.length) setNodeOpen(n, o); n.children.forEach(c => setOpen(c, o)); };
 menu.onclick = e => {
   const a = e.target.dataset.a; if (!a) return;numericBindings.forEach(b=>b.finish());if(a==='spacer'||a==='removeSpacer'){presentationCommand(a);return;} menu.classList.remove('show');
+  if(a==='description'){
+    const binding=els.get(menuNode)?.querySelector('.tw')?._nodeEditor;
+    if(binding&&!e.target.hidden&&!binding.description&&!historyComposing){
+      const end=binding.title.value.length;
+      insertDescription(binding,end,end);
+    }
+    return;
+  }
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
   else if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { depthController?.invalidate(); menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
 };
@@ -2307,5 +2326,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.14.2', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.14.4', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
