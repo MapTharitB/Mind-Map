@@ -1,4 +1,4 @@
-/* Outliner version 1.14.4 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.15.0 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -167,7 +167,17 @@ function parseMapSizeDraft(text){
   text=String(text).trim();if(!/^(?:[0-9]+(?:\.[0-9]{0,2})?|\.[0-9]{1,2})$/.test(text))return null;
   const value=Number(text);return Number.isFinite(value)?normalizeMapSize(value):null;
 }
-function copyPresentation(from,to){delete to.titleLineCount;if(from.titleLineCount>1)to.titleLineCount=from.titleLineCount;delete to.mapSize;delete to.kind;if(from.mapSize!==undefined&&from.mapSize!==1)to.mapSize=mapSizeUnits(from.mapSize)/MAP_SIZE_UNITS;if(from.kind==='spacer')to.kind='spacer';return to;}
+function copyPresentation(from,to){
+  delete to.titleLineCount;
+  delete to.mapSize;
+  delete to.kind;
+  delete to.childrenInRow;
+  if(from.titleLineCount>1)to.titleLineCount=from.titleLineCount;
+  if(from.mapSize!==undefined&&from.mapSize!==1)to.mapSize=mapSizeUnits(from.mapSize)/MAP_SIZE_UNITS;
+  if(from.kind==='spacer')to.kind='spacer';
+  if(from.childrenInRow===true)to.childrenInRow=true;
+  return to;
+}
 function canMarkSpacer(node){
   return node.kind!=='spacer'&&!node.children.length&&!node.text.includes('\n')&&/^[\s\u200b]*$/u.test(node.text);
 }
@@ -175,7 +185,12 @@ function clearSpacerKind(node){
   if(node.kind!=='spacer')return false;
   delete node.kind;return true;
 }
-function validPresentation(node){return validTitleLines(node)&&(node.mapSize===undefined||mapSizeUnits(node.mapSize)!==null)&&(node.kind===undefined||node.kind==='spacer'&&node.text===''&&node.titleLineCount===undefined&&node.children.length===0);}
+function validPresentation(node){
+  return validTitleLines(node)
+    &&(node.mapSize===undefined||mapSizeUnits(node.mapSize)!==null)
+    &&(node.childrenInRow===undefined||node.childrenInRow===true&&node.kind!=='spacer')
+    &&(node.kind===undefined||node.kind==='spacer'&&node.text===''&&node.titleLineCount===undefined&&node.children.length===0);
+}
 const originalHeader = String.raw`<!-- OUTLINER (WorkFlowy style outliner) - one self-contained file. READ THIS BEFORE EDITING.
      Every REQUIREMENT comment records something the owner explicitly asked for.
      Every DO NOT comment records something the owner rejected or that caused a real bug.
@@ -269,6 +284,9 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 /* The three text style buttons at the top of the menu: a check mark (reserved width, so the labels stay aligned) shows the current one. */
 .moa-outliner .menu button[data-m]::before{content:"";display:inline-block;width:1.3em}
 .moa-outliner .menu button[data-m].on::before{content:"✓"}
+.moa-outliner .menu .child-row-toggle:not([hidden]){display:flex;align-items:center}
+.moa-outliner .menu .child-row-toggle::before{content:"";flex:0 0 1em}
+.moa-outliner .menu .child-row-toggle[aria-pressed="true"]::before{content:"✓" / ""}
 .moa-outliner .arrow{position:absolute;left:-13px;top:0;width:16px;height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:26px;opacity:0;transition:transform .12s,opacity .12s}
 .moa-outliner .row:hover .arrow,.moa-outliner .arrow:focus-visible{opacity:1}
 .moa-outliner:not(.ipad-safari) .arrow span{display:block;line-height:1;transition:transform .12s}
@@ -327,9 +345,9 @@ const presentationCSS=String.raw`
 .moa-outliner .tw.map-size-active>.hl{right:58px}
 .moa-outliner .map-size-badge{position:absolute;right:0;top:3px;width:54px;min-height:24px;text-align:center;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);font:12px/22px 'Cascadia Code',monospace;pointer-events:none}
 .moa-outliner .map-size-badge[hidden]{display:none}
-.moa-outliner .tw.map-size-active::before{content:"";position:absolute;left:-22px;right:0;top:0;height:max(var(--bh),var(--map-size-title-height,0px));border-radius:6px;background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
-.moa-outliner .head>.tw.map-size-active::before{left:0}
-.moa-outliner .row.sel>.tw.map-size-active::before,.moa-outliner .row.drop-in>.tw.map-size-active::before{display:none}
+.moa-outliner .tw.map-presentation-active::before{content:"";position:absolute;left:-22px;right:0;top:0;height:max(var(--bh),var(--map-size-title-height,0px));border-radius:6px;background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
+.moa-outliner .head>.tw.map-presentation-active::before{left:0}
+.moa-outliner .row.sel>.tw.map-presentation-active::before,.moa-outliner .row.drop-in>.tw.map-presentation-active::before{display:none}
 .moa-outliner .spacer-editor>textarea::placeholder{color:var(--mute);font-style:italic}
 .moa-outliner #ol-menu{width:218px;min-width:218px;max-width:calc(100vw - 16px)}
 .moa-outliner #ol-menu button{min-height:40px}
@@ -456,12 +474,12 @@ const template = String.raw`<div class="page">
 <!-- Latest owner override: Expand to Level applies intentional valid adjustments immediately; no Apply or optional live mode. -->
 <!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
 <div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
+<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange children in one row</button><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
 function encodeNodeText(node, depth, version = 1) {
-  const parts = splitNodeText(node.text, node.titleLineCount), lines = parts.hasDescription ? parts.description.split('\n') : [], prefix = '  '.repeat(depth), out = [prefix + '- ' + (version === 3 ? JSON.stringify(parts.title) : parts.title)];
+  const parts = splitNodeText(node.text, node.titleLineCount), lines = parts.hasDescription ? parts.description.split('\n') : [], prefix = '  '.repeat(depth), out = [prefix + '- ' + (version >= 3 ? JSON.stringify(parts.title) : parts.title)];
   if (lines.length) {
     const bodyPrefix = prefix + '  ';
     out.push(bodyPrefix + '[desc]');
@@ -473,18 +491,22 @@ function encodeNodeText(node, depth, version = 1) {
 function decodeDescriptionOutline(text) {
   // Accept one conventional terminal line ending; no extra trailing content.
   if(/\[\/moa\](?:\r?\n)$/.test(text))text=text.replace(/\r?\n$/, '');
-  const v3=/^ *\[moa v=3\](?:\r?\n|$)/.test(text);
-  // In LF v3 documents a description's literal CR remains payload. A CRLF
+  const quotedHeader=/^ *\[moa v=[34]\](\r?\n|$)/.exec(text);
+  // In LF v3/v4 documents a description's literal CR remains payload. A CRLF
   // envelope declares conventional CRLF transport; remove only that added CR.
-  const raw = (v3&&!/^ *\[moa v=3\]\r\n/.test(text)?text:text.replace(/\r\n/g, '\n')).split('\n');
+  const raw = (quotedHeader&&quotedHeader[1]!=='\r\n'?text:text.replace(/\r\n/g, '\n')).split('\n');
   // Only the first physical line can declare an extended document.
   const reject = { recognized: false, attempted: /^\s*\[\/?moa(?:\s|\])/.test(raw[0] || '') };
-  if (!raw.length || !v3&&raw.some(line => /\r/.test(line))) return reject;
+  if (!raw.length || !quotedHeader&&raw.some(line => /\r/.test(line))) return reject;
   const common = Math.min(...raw.filter(line => line.length).map(line => line.match(/^ */)[0].length));
   if (!Number.isFinite(common) || common % 2) return reject;
   let lines = raw.map(line => line.slice(common)), extended=false,codecVersion=1;
   const attempted=reject.attempted;
-  if(attempted){if(!['[moa v=1]','[moa v=2]','[moa v=3]'].includes(lines[0])||lines[lines.length-1]!=='[/moa]')return{...reject,attempted:true};codecVersion=Number(lines[0].match(/v=([123])/)[1]);extended=true;lines=lines.slice(1,-1);}
+  if(attempted){
+    const header=/^\[moa v=([1-4])\]$/.exec(lines[0]);
+    if(!header||lines[lines.length-1]!=='[/moa]')return reject;
+    codecVersion=Number(header[1]);extended=true;lines=lines.slice(1,-1);
+  }
   const items = [], stack = [];
   let owner = null, ownerDepth = -1, mayDescribe = false, recognized = extended, mayPresent=false;
   for (let i = 0; i < lines.length; i++) {
@@ -493,16 +515,20 @@ function decodeDescriptionOutline(text) {
       const depth = match[1].length / 2;
       if (!Number.isInteger(depth) || depth > stack.length) return reject;
       owner = { text: match[3], children: [] }; ownerDepth = depth;
-      if(codecVersion===3){try{const title=JSON.parse(match[3]);if(typeof title!=='string')return{...reject,attempted:true};setNodeText(owner,{title,hasDescription:false,description:''});}catch(_){return{...reject,attempted:true};}}
+      if(codecVersion>=3){try{const title=JSON.parse(match[3]);if(typeof title!=='string')return{...reject,attempted:true};setNodeText(owner,{title,hasDescription:false,description:''});}catch(_){return{...reject,attempted:true};}}
       if (depth === 0) items.push(owner); else stack[depth - 1].children.push(owner);
       stack.length = depth; stack.push(owner); mayDescribe = true; mayPresent=extended; continue;
     }
     const prefix = '  '.repeat(ownerDepth + 1);
     if(extended&&owner&&mayPresent&&line.startsWith(prefix+'[map')){
-      const metadata=/^\[map (spacer )?size=([0-9]+(?:\.[0-9]+)?)\]$/.exec(line.slice(prefix.length));
-      if(!metadata)return{...reject,attempted:true};const token=metadata[2],value=Number(token),units=mapSizeUnits(value);
+      const metadata=/^\[map (spacer )?size=([0-9]+(?:\.[0-9]+)?)( children=row)?\]$/.exec(line.slice(prefix.length));
+      if(!metadata||metadata[3]&&codecVersion<4)return reject;
+      const token=metadata[2],value=Number(token),units=mapSizeUnits(value);
       if(units===null||(token.split('.')[1]||'').length>(codecVersion===1?2:4)||codecVersion===1&&value>10)return{...reject,attempted:true};
-      if(value!==1)owner.mapSize=units/MAP_SIZE_UNITS;if(metadata[1])owner.kind='spacer';mayPresent=false;continue;
+      if(value!==1)owner.mapSize=units/MAP_SIZE_UNITS;
+      if(metadata[1])owner.kind='spacer';
+      if(metadata[3])owner.childrenInRow=true;
+      mayPresent=false;continue;
     }
     if (!owner || !mayDescribe || line !== prefix + '[desc]') return extended?{...reject,attempted:true}:reject;
     mayPresent=false;
@@ -810,7 +836,7 @@ function load() {
       while (stack.length) {
         const n = stack.pop();
         if (!n || !Number.isSafeInteger(n.id) || ids.has(n.id) || typeof n.text !== 'string' || typeof n.open !== 'boolean' || !Array.isArray(n.children)) throw new Error('Invalid outline');
-        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined||n.titleLineCount!==undefined))throw new Error('Invalid outline presentation');
+        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined||n.titleLineCount!==undefined||n.childrenInRow!==undefined))throw new Error('Invalid outline presentation');
         if(n.titleLineCount===1)delete n.titleLineCount;
         if(n.mapSize!==undefined)n.mapSize=mapSizeUnits(n.mapSize)/MAP_SIZE_UNITS;if(n.mapSize===1)delete n.mapSize;ids.add(n.id); for (const child of n.children) stack.push(child);
       }
@@ -1095,8 +1121,10 @@ function refreshNodeEditor(binding) {
 }
 function updateBadge(host,n){
   let badge=host.querySelector(':scope > .map-size-badge');if(!badge){badge=el('span','map-size-badge');badge.setAttribute('aria-hidden','true');host.appendChild(badge);}
-  host.classList.toggle('map-size-active',(n.mapSize??1)!==1);
-  badge.textContent='×'+displayMapSize(n.mapSize??1).replace(/\.?0+$/,'');badge.hidden=(n.mapSize??1)===1;
+  const size=n.mapSize??1,hasSize=size!==1;
+  host.classList.toggle('map-size-active',hasSize);
+  host.classList.toggle('map-presentation-active',hasSize||n.childrenInRow===true);
+  badge.textContent='×'+displayMapSize(size).replace(/\.?0+$/,'');badge.hidden=!hasSize;
 }
 function updateEditorBadge(binding,node){
   if(!binding)return;
@@ -1506,10 +1534,13 @@ function delItems(items) {
 // Bullet menu. Wording is a requirement: Expand All / Collapse All act on this bullet's subtree, Export Visible, Export, Delete.
 const menu = container.querySelector('#ol-menu'),numericBindings=[];
 const sizeInput=container.querySelector('#ol-map-size'),sizeScope=container.querySelector('#ol-size-subtree');
+const childRowToggle=menu.querySelector('.child-row-toggle');
 let sizeComposing=false,sizeBlurPending=false,sizeDirty=false,sizeInclude=false,sizeSession=null;
 function promotePresentation(n){if(n===phNode){phNode=phOwner=null;}}
 function syncPresentationMenu(){
   if(!menuNode)return;const value=menuNode.mapSize??1;if(!sizeDirty&&!sizeComposing)sizeInput.value=displayMapSize(value);
+  childRowToggle.hidden=menuNode.kind==='spacer'||menuNode===phNode;
+  childRowToggle.setAttribute('aria-pressed',String(menuNode.childrenInRow===true));
   container.querySelector('#ol-size-down').disabled=value<=MIN_MAP_SIZE;container.querySelector('#ol-size-up').disabled=value>=MAX_MAP_SIZE;
   menu.querySelector('[data-a="description"]').hidden=menuNode.kind==='spacer'||splitNodeText(menuNode.text,menuNode.titleLineCount).hasDescription;
   menu.querySelector('[data-a="removeSpacer"]').hidden=menuNode.kind!=='spacer';
@@ -1529,6 +1560,16 @@ function reconcilePresentationMenu(){
 function captureSizeBaseline(n,include){
   const entries=[],stack=[n];while(stack.length){const node=stack.pop();entries.push({node,parent:par.get(node),value:node.mapSize??1});if(include)for(let i=node.children.length-1;i>=0;i--)stack.push(node.children[i]);}return entries;
 }
+function beginPresentationCommand(){
+  endAdjustment();
+  if(historyHost&&!historyCallback('beforeCommand','presentation'))return false;
+  record();
+  return true;
+}
+function refreshPresentationEditors(node){
+  updateEditorBadge(els.get(node)?.querySelector('.tw')?._nodeEditor,node);
+  if(zoom===node)updateEditorBadge(headBinding,node);
+}
 function presentationCommand(action,n=menuNode,value,reset=false){
   if(!n||n===root||!par.has(n)||historyComposing||sizeComposing||destroyed)return false;
   if(action==='size'){
@@ -1545,18 +1586,23 @@ function presentationCommand(action,n=menuNode,value,reset=false){
       if(next!==(node.mapSize??1))changes.push({node,value:next});
     }
     if(!changes.length)return false;
-    if(!session){endAdjustment();if(historyHost&&!historyCallback('beforeCommand','presentation'))return false;record();}
+    if(!session&&!beginPresentationCommand())return false;
     if(session)adjustment.writing=true;
     for(const change of changes){
       const node=change.node;promotePresentation(node);if(change.value===1)delete node.mapSize;else node.mapSize=change.value;
-      updateEditorBadge(els.get(node)?.querySelector('.tw')?._nodeEditor,node);
-      if(zoom===node)updateEditorBadge(headBinding,node);
+      refreshPresentationEditors(node);
     }
     save();if(session&&adjustment?.token===session.token)adjustment.writing=false;syncPresentationMenu();return true;
   }
+  if(action==='childrenInRow'){
+    if(n.kind==='spacer'||n===phNode||!beginPresentationCommand())return false;
+    if(n.childrenInRow)delete n.childrenInRow;else n.childrenInRow=true;
+    refreshPresentationEditors(n);
+    save();syncPresentationMenu();return true;
+  }
   if(action!=='spacer'&&action!=='removeSpacer')return false;
   if(action==='removeSpacer'&&n.kind!=='spacer')return false;
-  endAdjustment();if(historyHost&&!historyCallback('beforeCommand','presentation'))return false;record();
+  if(!beginPresentationCommand())return false;
   if(action==='removeSpacer'){
     clearSpacerKind(n);
     if(searching())sKeep.add(n);
@@ -1564,6 +1610,7 @@ function presentationCommand(action,n=menuNode,value,reset=false){
     let spacer=n;
     if(canMarkSpacer(n)){promotePresentation(n);n.text='';}
     else{spacer=mk();insertAfterNodeEnd(n,spacer);}
+    delete spacer.childrenInRow;
     spacer.kind='spacer';if(searching())sKeep.add(spacer);
   }
   menu.classList.remove('show');render();return true;
@@ -1590,6 +1637,11 @@ listen(sizeInput,'compositionstart',()=>{sizeComposing=true;numericBindings.forE
 listen(sizeInput,'compositionend',()=>{sizeComposing=false;if(sizeBlurPending){sizeBlurPending=false;commitSize();}});
 listen(sizeInput,'change',()=>commitSize());listen(sizeInput,'blur',()=>{if(sizeComposing)sizeBlurPending=true;else commitSize();});
 listen(sizeInput,'keydown',e=>{if(e.key==='Enter'&&!e.isComposing&&e.keyCode!==229){e.preventDefault();commitSize();}});
+listen(childRowToggle,'click',()=>{
+  if(childRowToggle.hidden||!menu.classList.contains('show'))return;
+  numericBindings.forEach(binding=>binding.finish());
+  if(commitSize())presentationCommand('childrenInRow');
+});
 listen(sizeScope,'change',()=>{if(sizeComposing||historyComposing){sizeScope.checked=sizeInclude;return;}numericBindings.forEach(b=>b.finish());commitSize();sizeInclude=sizeScope.checked;});
 listen(container.querySelector('#ol-size-reset'),'click',()=>{numericBindings.forEach(b=>b.finish());if(commitSize())presentationCommand('size',menuNode,1,true);});
 for(const [id,direction]of [['ol-size-down',-1],['ol-size-up',1]])numericBindings.push(createNumericStepper({button:container.querySelector('#'+id),direction,scale:true,valueAt:mapSizeAt,read:()=>menuNode?.mapSize??1,bounds:()=>({min:MIN_MAP_SIZE,max:MAX_MAP_SIZE}),allowed:()=>(!sizeSession||adjustment?.token===sizeSession.token)&&!sizeComposing&&!historyComposing&&menu.classList.contains('show')&&!!menuNode&&par.has(menuNode),step:()=>{if(commitSize())presentationCommand('size',menuNode,normalizeMapSize((menuNode.mapSize??1)*Math.pow(1.1,direction)));},write:value=>presentationCommand('size',menuNode,value),start:()=>{if(!commitSize())return false;const token=beginAdjustment('outline');if(!token)return false;sizeSession={node:menuNode,include:sizeInclude,entries:captureSizeBaseline(menuNode,sizeInclude),token};return true;},finish:()=>{const session=sizeSession;sizeSession=null;if(session)endAdjustment(session.token);}}));
@@ -1734,9 +1786,15 @@ function toText(list, visible) {
   const entries=[];
   (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;entries.push({n,d});w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
   let extended=false,codecVersion=1;
-  for(const {n} of entries){if(n.titleLineCount>1){extended=true;codecVersion=3;}else if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(codecVersion<2&&(units>100000||units%100))codecVersion=2;}}
+  for(const {n} of entries){
+    if(n.childrenInRow){extended=true;codecVersion=4;}
+    else if(n.titleLineCount>1){extended=true;codecVersion=Math.max(3,codecVersion);}
+    else if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(codecVersion<2&&(units>100000||units%100))codecVersion=2;}
+  }
   const out=entries.map(({n,d})=>{const encoded=encodeNodeText(n,d,codecVersion).split('\n');
-    if(n.kind==='spacer'||(n.mapSize??1)!==1)encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+']');
+    if(n.kind==='spacer'||(n.mapSize??1)!==1||n.childrenInRow){
+      encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+(n.childrenInRow?' children=row':'')+']');
+    }
     return encoded.join('\n');});
   return extended?'[moa v='+codecVersion+']\n'+out.join('\n')+'\n[/moa]':out.join('\n');
 }
@@ -2326,5 +2384,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.14.4', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.15.0', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

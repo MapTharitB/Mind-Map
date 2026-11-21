@@ -1,4 +1,4 @@
-/* MindMap 1.14.9 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.15.0 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -285,8 +285,7 @@ function inkMetrics(text,fs,fw){
 // Search highlights retain grapheme boundaries for Thai marks.
 const descriptionGraphemes=typeof Intl.Segmenter==='function'?new Intl.Segmenter('th',{granularity:'grapheme'}):null;
 function descriptionSize(node,MD){
-  const child=node.children.find(ch=>ch.kind!=='spacer');
-  return 0.75*fsz(node.depth+1,MD)*(child?.mapSize??node.mapSize??1);
+  return 0.75*fsz(node.depth+1,MD)*(node.mapSize??1);
 }
 // Halve free interline whitespace; measured Thai/Latin ink retains its existing safety gap.
 function textLineAdvance(previous,ink,fs){
@@ -355,7 +354,7 @@ function attachNodeTexts(root,texts,counts){
   };walk(root);
 }
 function attachPresentation(root,values){
-  if(!values)return;let index=0;const walk=n=>{if(!n.synthetic){const p=values[index++];n.mapSize=p.mapSize;n.kind=p.kind;if(n.kind==='spacer'){n.label='';delete n.description;delete n.titleLines;n.placeholder=false;canonicalTexts.delete(n);}}n.children.forEach(walk);};walk(root);
+  if(!values)return;let index=0;const walk=n=>{if(!n.synthetic){const p=values[index++];n.mapSize=p.mapSize;n.kind=p.kind;if(p.childrenInRow)n.childrenInRow=true;if(n.kind==='spacer'){n.label='';delete n.description;delete n.titleLines;n.placeholder=false;canonicalTexts.delete(n);}}n.children.forEach(walk);};walk(root);
   // A new spacer root is an occupied slot, never an extra real font/color level.
   if(root.synthetic&&root.children.filter(n=>n.kind!=='spacer').length<=1){root.depth=-1;const shift=n=>{n.depth--;n.children.forEach(shift);};root.children.forEach(shift);}
 }
@@ -501,6 +500,9 @@ function annotateNodes(node,MD){
   node.thaiTier=node.kind==='spacer'?0:thaiHeightTier(node.label);node.hasLower=node.kind!=='spacer'&&hasThaiLower(node.label);
   node.children.forEach(ch=>annotateNodes(ch,MD));prepareFamily(node,MD);
 }
+function forcesChildRow(node){
+  return node.childrenInRow===true&&node.family.count>=2;
+}
 // One bottom-up footprint record per node; placement never remeasures descendants.
 function measureSubtree(node,MD,nominal=false,reuseChildren=false){
   if(!reuseChildren)node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
@@ -510,7 +512,8 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
   const ownTop=Math.min(0,...node.textBlock.runs.map(run=>run.baseline-run.ascent));
   const ownBottom=Math.max(node.textBlock.bottom,...node.textBlock.runs.map(run=>run.baseline+run.descent));
   let minY=ownTop;
-  let horizontal=layoutPreferences.horizontalFamily(node);
+  const forced=forcesChildRow(node);
+  let horizontal=forced||layoutPreferences.horizontalFamily(node);
   if(children.length){
     const alignChildren=stacked=>{
       const leftAligned=node.layoutDepth===0?rootChildrenStacked(node):stacked;
@@ -536,7 +539,7 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
       for(const offset of offsets){offset.x+=centerOffset;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
       // Length limits are opt-in; left overhang alone is not a width limit.
       // Incoming connector clearance is checked by the vertical parent below.
-      if(layoutPreferences.lengthLimitEnabled){
+      if(!forced&&layoutPreferences.lengthLimitEnabled){
         const span=cursor,titles=node.textBlock.runs.filter(run=>!run.description),titleWidth=Math.max(...titles.map(run=>run.x+Math.max(run.width,run.right)))-Math.min(0,...titles.map(run=>run.x-run.left)),threshold=titleWidth*layoutPreferences.lengthLimitRatio;
         const tolerance=1e-9*Math.max(1,span,threshold);
         if(!Number.isFinite(span)||!Number.isFinite(threshold)||titleWidth<=0||span>threshold+tolerance){horizontal=false;offsets.length=0;height=node.fs*C.LINE_H+node.textBlock.extraHeight;alignChildren(true);}
@@ -726,7 +729,8 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
     d1Mode:'grid',d1Cols:cols,d1Groups,d1ColX,d1BusY,d1X0:gridX0,d1X1:gridX1,firstRowBonus};
 }
 function rootChildrenStacked(root){
-  const NC=root.children.filter(ch=>ch.kind!=='spacer').length;
+  if(forcesChildRow(root))return false;
+  const NC=root.family.count;
   // A lone real root child always uses the existing left-side vertical connector.
   return NC===1&&!root.synthetic||NC>0&&!layoutPreferences.hlimitInf&&NC>layoutPreferences.hlimitN;
 }
@@ -748,7 +752,12 @@ function layout(root,colorSeed){
   const stackedRoots=root.synthetic&&layoutPreferences.rootEnabled&&layoutPreferences.rootOrder!=='across'&&layoutPreferences.rootEffective<roots.filter(n=>n.kind!=='spacer').length;
   if(stackedRoots)roots.forEach(n=>alignTextBlock(n.textBlock,true));
   // Spacer-only footprints retain the original nominal widths of unaffected real branches.
-  if(layoutPreferences.levelsEnabled||described||multiline||presented){const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);roots.forEach(n=>measureSubtree(n,MD,nominal));}
+  const measureAll=layoutPreferences.levelsEnabled||described||multiline||presented;
+  if(measureAll||sourcePresentation?.some(p=>p.childrenInRow)){
+    const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);
+    const hasForcedRow=n=>forcesChildRow(n)||n.children.some(hasForcedRow);
+    for(const n of roots)if(measureAll||hasForcedRow(n))measureSubtree(n,MD,nominal);
+  }
   if(!root.synthetic)return layoutTree(root,MD,colorSeed);
   // Color once in original whole-map order; outer packing only translates complete trees.
   root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
@@ -1812,8 +1821,10 @@ function setText(text,options={}){
   let presentation=null;
   if(options&&'nodePresentation' in options){
     const values=options.nodePresentation,count=countMetadataNodes();
-    if(!Array.isArray(values)||values.length!==count||Array.from(values).some(p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
-    presentation=values.map(p=>({kind:p.kind,mapSize:mapSizeUnits(p.mapSize)/MAP_SIZE_UNITS}));
+    const invalid=p=>!p||!['node','spacer'].includes(p.kind)||mapSizeUnits(p.mapSize)===null
+      ||p.childrenInRow!==undefined&&(p.childrenInRow!==true||p.kind==='spacer');
+    if(!Array.isArray(values)||values.length!==count||Array.from(values).some(invalid)){const error=new TypeError('Invalid node presentation metadata');reportError(error);throw error;}
+    presentation=values.map(p=>({kind:p.kind,mapSize:mapSizeUnits(p.mapSize)/MAP_SIZE_UNITS,...(p.childrenInRow?{childrenInRow:true}:{})}));
     const parsed=parse(text),stack=parsed?(parsed.synthetic?parsed.children.slice().reverse():[parsed]):[];let index=0;
     while(stack.length){const n=stack.pop(),p=presentation[index];if(p.kind==='spacer'&&(n.children.length||nodeTexts&&nodeTexts[index]!==''||titleLines&&titleLines[index]!==1)){const error=new TypeError('A spacer must be an empty leaf');reportError(error);throw error;}index++;for(let i=n.children.length-1;i>=0;i--)stack.push(n.children[i]);}
   }
@@ -1954,5 +1965,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.14.9',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.15.0',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1'],mount};
 })();

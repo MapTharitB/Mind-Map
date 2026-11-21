@@ -74,6 +74,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 #map-options .shell-button{height:40px;margin:0;padding:0 8px;width:100%;font-size:12px}
 #map-options .square-reset{width:40px;display:flex;align-items:center;justify-content:center;padding:0}
 #download-pdf{display:block}
+#download-pdf[hidden]+#settings-controls>.pdf-divider{display:none}
 #divider{position:absolute;top:0;bottom:0;width:var(--divider-target-width,12px);z-index:24;cursor:ew-resize;touch-action:none;outline:0}
 #divider::after{content:"";position:absolute;top:0;bottom:0;left:var(--divider-line-left,5px);width:2px;background:var(--line)}
 #divider:hover::after,#divider:focus-visible::after,.resizing #divider::after{background:var(--accent)}
@@ -84,7 +85,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 
 
 /* Approved compact layout menu: all rows share label / control / checkbox columns. */
-#settings-controls:not([hidden]){display:grid;grid-template-columns:48px minmax(0,1fr) 40px;row-gap:8px;column-gap:12px;margin-bottom:8px}
+#settings-controls:not([hidden]){--map-option-row-gap:8px;display:grid;grid-template-columns:48px minmax(0,1fr) 40px;row-gap:var(--map-option-row-gap);column-gap:12px;margin-bottom:8px}
+#download-pdf:not([hidden])+#settings-controls{padding-top:var(--map-option-row-gap)}
 #settings-controls .option-row,#settings-controls .wrap-controls{display:contents}
 #settings-controls .option-row[hidden]{display:none}
 #settings-controls .option-label{white-space:nowrap;align-self:center}
@@ -118,7 +120,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
     <div class="map-controls" hidden>
       <button id="map-more" class="shell-button" aria-label="Mind Map Layout" aria-expanded="false" aria-controls="map-options">⋯</button>
       <div id="map-options" hidden>
+        <button id="download-pdf" class="shell-button" hidden>Download PDF</button>
         <div id="settings-controls" hidden>
+          <div class="sep pdf-divider" role="separator"></div>
           <div class="section-title scale-option" hidden>Branch Scale</div>
           <div class="option-row scale-option" hidden><label class="option-label" for="branch-scale">Scale</label><div class="stepper"><button id="scale-down" aria-label="Decrease Branch Scale">‹</button><input id="branch-scale" aria-label="Branch Scale" type="number" inputmode="decimal" min="1" max="5" step="0.01" value="2.5"><button id="scale-up" aria-label="Increase Branch Scale">›</button></div><button id="scale-reset" class="shell-button square-reset" aria-label="Reset Branch Scale">Reset</button></div>
           <div class="sep scale-option" hidden></div>
@@ -139,9 +143,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
           <div class="sep"></div>
           <div class="option-row"><span class="option-label">Color</span><button id="random-color" class="shell-button">Random</button><span aria-hidden="true"></span></div>
           <div class="option-row"><label class="option-label" for="color-seed">Seed</label><div class="stepper"><button id="seed-down" aria-label="Decrease Seed">‹</button><input id="color-seed" type="number" inputmode="numeric" min="0" max="16777215" step="1" value="0"><button id="seed-up" aria-label="Increase Seed">›</button></div><button id="seed-reset" class="shell-button square-reset" aria-label="Reset Color Seed">Reset</button></div>
-          <div class="sep"></div>
         </div>
-        <button id="download-pdf" class="shell-button" hidden>Download PDF</button>
       </div>
     </div>
     <div id="map-host"></div>
@@ -170,8 +172,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.14.4' },
-  mindmap: { src: './mindmap.js', v: '1.14.9' }
+  outliner: { src: './outliner.js', v: '1.15.0' },
+  mindmap: { src: './mindmap.js', v: '1.15.0' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, presentationSupported = true) {
@@ -182,6 +184,7 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
     const node = search.pop();
     if (!node || typeof node !== 'object' || !Number.isInteger(node.id) || typeof node.text !== 'string' || typeof node.open !== 'boolean' || !Array.isArray(node.children) || seen.has(node.id)) throw new TypeError('Invalid outline node');
     if(node.titleLineCount!==undefined&&(!Number.isSafeInteger(node.titleLineCount)||node.titleLineCount<1||node.titleLineCount>node.text.split('\n').length||node.kind==='spacer'))throw new TypeError('Invalid node title-line metadata');
+    if(node.childrenInRow!==undefined&&(node.childrenInRow!==true||node.kind==='spacer'))throw new TypeError('Invalid child-row metadata');
     seen.add(node.id);nodes.push(node);
     if (node.id === snapshot.zoomId) zoomNode = node;
     if (node.id === pinnedId) pinnedNode = node;
@@ -210,7 +213,7 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
     const placeholder = placeholders.has(node);
     const label = node.kind==='spacer'?'\u2063':placeholder ? '(Untitled)' : node.text.replace(/\r\n?|\n/g, ' ');
     if (placeholder) placeholderNodes.push(lines.length);
-    lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);nodeTitleLines.push(node.titleLineCount??1);nodeHasChildren.push(node.kind!=='spacer'&&node.children.some(child=>child.kind!=='spacer'));nodePresentation.push({mapSize:node.mapSize??1,kind:node.kind==='spacer'?'spacer':'node'});
+    lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);nodeTitleLines.push(node.titleLineCount??1);nodeHasChildren.push(node.kind!=='spacer'&&node.children.some(child=>child.kind!=='spacer'));nodePresentation.push({mapSize:node.mapSize??1,kind:node.kind==='spacer'?'spacer':'node',...(node.childrenInRow?{childrenInRow:true}:{})});
     if (!syncCollapse || node.open || node === collapseAnchor) {
       for (let i = node.children.length - 1; i >= 0; i--) stack.push({node:node.children[i], depth:depth+1});
     }
@@ -530,6 +533,8 @@ function flushSearch(revealing=false){
 }
 function receiveSearch(value){latestSearchQuery=typeof value?.query==='string'?value.query:'';searchGeneration++;searchDirty=true;flushSearch();}
 function presentationTransport(values){
+  if(supports('node-presentation-v3','setText'))return values;
+  if(values.some(p=>p.childrenInRow))throw new Error('Mind Map compatibility error: Arrange children in one row requires a newer Mind Map module. Reload the matching app files.');
   if(supports('node-presentation-v2','setText'))return values;
   if(supports('node-presentation-v1','setText'))return values.map(p=>({...p,mapSize:Math.round(Math.max(.1,Math.min(10,p.mapSize))*100)/100}));
   return undefined;
@@ -543,7 +548,7 @@ function flushSync(revealing=false) {
   const current=()=>generation===projectionGeneration&&map===currentMap;
   const failed=error=>{if(current())dirty=true;report(/compatibility error/i.test(errorText(error))?'Mind Map compatibility':'Mind Map',error);};
   try {
-    const projection=projectOutline(outline.getSnapshot({titleLines:true}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'));
+    const projection=projectOutline(outline.getSnapshot({titleLines:true}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v3','setText')||supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'));
     const {text}=projection;
     if(projection.nodeTitleLines.some(count=>count>1)&&!supports('node-title-lines','setText'))throw new Error('Mind Map compatibility error: multiline titles require a node-title-lines capable module. Reload the matching app files.');
     const nodeTitleLines=supports('node-title-lines','setText')?projection.nodeTitleLines:undefined;
