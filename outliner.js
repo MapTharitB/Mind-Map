@@ -1,4 +1,4 @@
-/* Outliner version 1.15.0 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.15.1 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -341,10 +341,16 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 const presentationCSS=String.raw`
 .moa-outliner .page>.sheet{width:calc(100% - var(--outline-scrollport-inset,0px))}
 .moa-outliner .row>.tw,.moa-outliner .head>.tw{min-width:42px}
-.moa-outliner .row>.tw.map-size-active,.moa-outliner .head>.tw.map-size-active{padding-right:58px;min-width:100px}
-.moa-outliner .tw.map-size-active>.hl{right:58px}
-.moa-outliner .map-size-badge{position:absolute;right:0;top:3px;width:54px;min-height:24px;text-align:center;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);font:12px/22px 'Cascadia Code',monospace;pointer-events:none}
-.moa-outliner .map-size-badge[hidden]{display:none}
+.moa-outliner .tw.map-size-active{--map-size-reserve:58px}
+.moa-outliner .tw.map-child-row-active{--map-child-row-width:24px;--map-child-row-reserve:calc(var(--map-child-row-width) + 4px)}
+.moa-outliner .tw.map-presentation-active{--map-badge-reserve:calc(var(--map-size-reserve,0px) + var(--map-child-row-reserve,0px))}
+.moa-outliner .row>.tw.map-presentation-active,.moa-outliner .head>.tw.map-presentation-active{padding-right:var(--map-badge-reserve);min-width:calc(42px + var(--map-badge-reserve))}
+.moa-outliner .tw.map-presentation-active>.hl{right:var(--map-badge-reserve)}
+.moa-outliner .tw.map-child-row-active>.description-field{margin-right:calc(-1 * var(--map-child-row-reserve))}
+.moa-outliner .map-size-badge,.moa-outliner .map-child-row-badge{position:absolute;top:3px;min-height:24px;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);pointer-events:none}
+.moa-outliner .map-size-badge{right:0;width:54px;text-align:center;font:12px/22px 'Cascadia Code',monospace}
+.moa-outliner .map-child-row-badge{right:var(--map-size-reserve,0px);width:var(--map-child-row-width);display:grid;place-items:center}
+.moa-outliner .map-size-badge[hidden],.moa-outliner .map-child-row-badge[hidden]{display:none}
 .moa-outliner .tw.map-presentation-active::before{content:"";position:absolute;left:-22px;right:0;top:0;height:max(var(--bh),var(--map-size-title-height,0px));border-radius:6px;background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
 .moa-outliner .head>.tw.map-presentation-active::before{left:0}
 .moa-outliner .row.sel>.tw.map-presentation-active::before,.moa-outliner .row.drop-in>.tw.map-presentation-active::before{display:none}
@@ -1119,18 +1125,30 @@ function refreshNodeEditor(binding) {
     fit(t);
   }
 }
+const childRowGlyph = '<svg width="18" height="16" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5.5V11M2.5 11V8.25h13V11"/><rect x="6.75" y="1" width="4.5" height="4.5" rx="1"/><rect x=".75" y="11" width="3.5" height="3.5" rx=".8"/><rect x="7.25" y="11" width="3.5" height="3.5" rx=".8"/><rect x="13.75" y="11" width="3.5" height="3.5" rx=".8"/></svg>';
 function updateBadge(host,n){
   let badge=host.querySelector(':scope > .map-size-badge');if(!badge){badge=el('span','map-size-badge');badge.setAttribute('aria-hidden','true');host.appendChild(badge);}
-  const size=n.mapSize??1,hasSize=size!==1;
+  const size=n.mapSize??1,hasSize=size!==1,hasRow=n.childrenInRow===true;
+  const layoutChanged=host.classList.contains('map-size-active')!==hasSize
+    ||host.classList.contains('map-child-row-active')!==hasRow;
   host.classList.toggle('map-size-active',hasSize);
-  host.classList.toggle('map-presentation-active',hasSize||n.childrenInRow===true);
+  host.classList.toggle('map-child-row-active',hasRow);
+  host.classList.toggle('map-presentation-active',hasSize||hasRow);
   badge.textContent='×'+displayMapSize(size).replace(/\.?0+$/,'');badge.hidden=!hasSize;
+
+  let rowBadge=host.querySelector(':scope > .map-child-row-badge');
+  if(hasRow&&!rowBadge){
+    rowBadge=el('span','map-child-row-badge');
+    rowBadge.setAttribute('role','img');
+    rowBadge.setAttribute('aria-label','Arrange children in one row enabled');
+    rowBadge.innerHTML=childRowGlyph;
+    host.appendChild(rowBadge);
+  }
+  if(rowBadge)rowBadge.hidden=!hasRow;
+  return layoutChanged;
 }
 function updateEditorBadge(binding,node){
-  if(!binding)return;
-  const hadBadge=binding.host.classList.contains('map-size-active');
-  updateBadge(binding.host,node);
-  if(hadBadge!==binding.host.classList.contains('map-size-active')){
+  if(binding&&updateBadge(binding.host,node)){
     fit(binding.title);
     if(binding.description)fit(binding.description);
   }
@@ -2384,5 +2402,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.15.0', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.15.1', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
