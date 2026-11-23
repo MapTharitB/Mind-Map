@@ -1,4 +1,4 @@
-/* Outliner version 1.17.2 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.19.4 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -167,7 +167,248 @@ function parseMapSizeDraft(text){
   text=String(text).trim();if(!/^(?:[0-9]+(?:\.[0-9]{0,2})?|\.[0-9]{1,2})$/.test(text))return null;
   const value=Number(text);return Number.isFinite(value)?normalizeMapSize(value):null;
 }
+const MAX_PHOTOS = 5;
+function validPhotos(photos) {
+  return Array.isArray(photos) && photos.length > 0 && photos.length <= MAX_PHOTOS && new Set(photos.map(photo => photo?.id)).size === photos.length && photos.every(photo =>
+    photo && typeof photo.id === 'string' && /^[0-9a-f]{32}$/.test(photo.id) &&
+    [photo.width, photo.height].every(value => Number.isInteger(value) && value > 0 && value <= 1600));
+}
+
+function createPhotoService() {
+  const budget = 24 * 1024 * 1024;
+  const cache = new Map();
+  let closed = false, database, opening, decoding = Promise.resolve(), used = 0;
+  function open() {
+    if (closed) return Promise.reject(new Error('The photo store is closed'));
+    if (!opening) opening = new Promise((resolve, reject) => {
+      const request = indexedDB.open('moa:photos', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('images');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => {
+        if (closed) { request.result.close(); reject(new Error('The photo store is closed')); return; }
+        database = request.result;
+        database.onversionchange = () => { database.close(); opening = null; };
+        resolve(database);
+      };
+    }).catch(error => { opening = null; throw error; });
+    return opening;
+  }
+  async function request(mode, action) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('images', mode);
+      const result = action(tx.objectStore('images'));
+      tx.oncomplete = () => resolve(result?.result);
+      tx.onabort = () => reject(tx.error || new Error('Photo storage failed'));
+    });
+  }
+  const read = id => request('readonly', store => store.get(id));
+  const write = entries => request('readwrite', store => {
+    for (const [id, asset] of entries) store.add(asset, id);
+  });
+  function evict() {
+    for (const [key, entry] of cache) {
+      if (used <= budget) break;
+      if (!entry.refs && entry.image) {
+        used -= entry.bytes;
+        entry.image.src = '';
+        cache.delete(key);
+      }
+    }
+  }
+  function acquire(photo, quality) {
+    if (closed) return { ready: Promise.reject(new Error('The photo store is closed')), release() {} };
+    const key = `${photo.id}:${quality}`;
+    let entry = cache.get(key);
+    if (entry) cache.delete(key);
+    else {
+      entry = { refs: 0, image: null, bytes: 0 };
+      entry.ready = decoding.then(async () => {
+        if (closed || !entry.refs) throw new Error('Photo load canceled');
+        const asset = await read(photo.id);
+        if (closed || !entry.refs || !asset?.[quality]) throw new Error('Photo unavailable');
+        const image = await decodePhoto(asset[quality]);
+        if (closed || !entry.refs) { image.src = ''; throw new Error('Photo load canceled'); }
+        entry.image = image;
+        entry.bytes = image.naturalWidth * image.naturalHeight * 4;
+        used += entry.bytes;
+        evict();
+        return image;
+      }).catch(error => { if (cache.get(key) === entry) cache.delete(key); throw error; });
+      decoding = entry.ready.catch(() => {});
+    }
+    cache.set(key, entry);
+    entry.refs++;
+    let released = false;
+    return { ready: entry.ready, release() {
+      if (released) return;
+      released = true;
+      entry.refs--;
+      evict();
+    } };
+  }
+  return {read, write, acquire, close() {
+    closed = true;
+    database?.close();
+    for (const entry of cache.values()) if (entry.image) entry.image.src = '';
+    cache.clear();
+  }};
+}
+
+function decodePhoto(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob), image = new Image();
+    const finish = ok => {
+      URL.revokeObjectURL(url);
+      image.onload = image.onerror = null;
+      if (ok) resolve(image); else reject(new Error('Could not read this image'));
+    };
+    image.onload = () => finish(true);
+    image.onerror = () => finish(false);
+    image.src = url;
+  });
+}
+
+function resizePhoto(image, limit, type = 'image/png') {
+  const scale = Math.min(1, limit / Math.max(image.naturalWidth, image.naturalHeight));
+  const canvas = document.createElement('canvas');
+  const width = canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.getContext('2d').drawImage(image, 0, 0, width, height);
+      canvas.toBlob(blob => {
+        canvas.width = canvas.height = 1;
+        if (blob) resolve({blob, width, height}); else reject(new Error('Could not resize this image'));
+      }, type, 0.88);
+    } catch (error) { canvas.width = canvas.height = 1; reject(error); }
+  });
+}
+
+function newPhotoId() {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function photoDimensions(bytes, type) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (type === 'image/png') {
+    if (bytes.length < 33 || view.getUint32(0) !== 0x89504e47 || view.getUint32(4) !== 0x0d0a1a0a ||
+        view.getUint32(8) !== 13 || view.getUint32(12) !== 0x49484452) return null;
+    return {width: view.getUint32(16), height: view.getUint32(20)};
+  }
+  if (bytes.length < 4 || view.getUint16(0) !== 0xffd8) return null;
+  for (let offset = 2; offset + 4 < bytes.length;) {
+    if (bytes[offset++] !== 0xff) return null;
+    while (bytes[offset] === 0xff) offset++;
+    const marker = bytes[offset++];
+    if (offset + 2 > bytes.length || marker === 0xda || marker === 0xd9) return null;
+    const length = view.getUint16(offset);
+    if (length < 2 || offset + length > bytes.length) return null;
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker) && length >= 8) {
+      return {width: view.getUint16(offset + 5), height: view.getUint16(offset + 3)};
+    }
+    offset += length;
+  }
+  return null;
+}
+
+async function preparePhoto(file) {
+  if (!file.size || file.size > 24 * 1024 * 1024 || !/^image\/(jpeg|png|heic|heif|webp|avif)$/i.test(file.type) &&
+      !/\.(jpe?g|png|hei[cf]|webp|avif)$/i.test(file.name)) throw new Error('Choose a supported photo under 24 MB');
+  const bytes = new Uint8Array(await file.slice(0, 512 * 1024).arrayBuffer());
+  const jpeg = photoDimensions(bytes, 'image/jpeg');
+  const dimensions = jpeg || photoDimensions(bytes, 'image/png');
+  if (dimensions && dimensions.width * dimensions.height > 32_000_000) throw new Error('This photo is too large');
+  const type = jpeg ? 'image/jpeg' : 'image/png';
+  const image = await decodePhoto(file);
+  try {
+    if (image.naturalWidth * image.naturalHeight > 32_000_000) throw new Error('This photo is too large');
+    const {blob: detail, width, height} = await resizePhoto(image, 1600, type);
+    const {blob: thumb} = await resizePhoto(image, 320, type);
+    return {photo: {id: newPhotoId(), width, height}, asset: {detail, thumb}};
+  } finally { image.src = ''; }
+}
+
+const photoZipLimit = 64 * 1024 * 1024;
+const photoCrcTable = Uint32Array.from({length: 256}, (_, value) => {
+  for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
+  return value;
+});
+function photoCrc(bytes) {
+  let crc = -1;
+  for (const byte of bytes) crc = (crc >>> 8) ^ photoCrcTable[(crc ^ byte) & 255];
+  return (crc ^ -1) >>> 0;
+}
+
+function photoZipHeader(name, size, crc, offset, central) {
+  const filename = new TextEncoder().encode(name);
+  const base = central ? 46 : 30, at = central ? 4 : 0;
+  const header = new Uint8Array(base + filename.length), view = new DataView(header.buffer);
+  view.setUint32(0, central ? 0x02014b50 : 0x04034b50, true);
+  if (central) { view.setUint16(4, 20, true); view.setUint32(42, offset, true); }
+  view.setUint16(4 + at, 20, true);
+  view.setUint16(12 + at, 33, true);
+  view.setUint32(14 + at, crc, true);
+  view.setUint32(18 + at, size, true);
+  view.setUint32(22 + at, size, true);
+  view.setUint16(26 + at, filename.length, true);
+  header.set(filename, base);
+  return header;
+}
+
+function photoZipEnd(count, length, offset) {
+  const end = new Uint8Array(22), view = new DataView(end.buffer);
+  view.setUint32(0, 0x06054b50, true);
+  view.setUint16(8, count, true); view.setUint16(10, count, true);
+  view.setUint32(12, length, true); view.setUint32(16, offset, true);
+  return end;
+}
+
+async function writePhotoZip(files) {
+  const local = [], central = [];
+  let offset = 0, directorySize = 0;
+  for (const [name, blob] of files) {
+    const crc = photoCrc(new Uint8Array(await blob.arrayBuffer()));
+    const header = photoZipHeader(name, blob.size, crc, offset, false);
+    const entry = photoZipHeader(name, blob.size, crc, offset, true);
+    local.push(header, blob); central.push(entry);
+    offset += header.length + blob.size;
+    directorySize += entry.length;
+  }
+  if (offset + directorySize + 22 > photoZipLimit || files.size > 4096) throw new Error('Choose a smaller outline section to export');
+  return new Blob([...local, ...central, photoZipEnd(files.size, directorySize, offset)], {type: 'application/zip'});
+}
+
+function readPhotoZip(buffer) {
+  const bytes = new Uint8Array(buffer), view = new DataView(buffer), entries = new Map(), central = [];
+  const utf8 = new TextDecoder('utf-8', {fatal: true});
+  const invalid = () => { throw new Error('Invalid or unsupported project ZIP'); };
+  const check = (offset, expected) => {
+    if (offset + expected.length > bytes.length || expected.some((byte, i) => bytes[offset + i] !== byte)) invalid();
+    return offset + expected.length;
+  };
+  let offset = 0;
+  while (offset + 30 <= bytes.length && view.getUint32(offset, true) === 0x04034b50) {
+    const length = view.getUint16(offset + 26, true), size = view.getUint32(offset + 18, true);
+    const start = offset + 30 + length, end = start + size;
+    if (length > 64 || end > bytes.length || entries.size >= 4096) invalid();
+    const name = utf8.decode(bytes.subarray(offset + 30, start)), data = bytes.subarray(start, end);
+    if (entries.has(name) || !/^(outline\.json|images\/[0-9a-f]{32}\.(?:png|jpg))$/.test(name)) invalid();
+    const crc = photoCrc(data);
+    check(offset, photoZipHeader(name, size, crc, offset, false));
+    central.push(photoZipHeader(name, size, crc, offset, true));
+    entries.set(name, data);
+    offset = end;
+  }
+  const directory = offset;
+  for (const entry of central) offset = check(offset, entry);
+  if (check(offset, photoZipEnd(entries.size, offset - directory, directory)) !== bytes.length) invalid();
+  if (!entries.has('outline.json')) invalid();
+  return entries;
+}
+
 function copyPresentation(from,to){
+  if (from.photos) to.photos = from.photos.map(({id, width, height}) => ({id, width, height})); else delete to.photos;
   delete to.titleLineCount;
   delete to.mapSize;
   delete to.kind;
@@ -184,6 +425,7 @@ function clearSpacerKind(node){
 }
 function validPresentation(node){
   return validTitleLines(node)
+    && (node.photos === undefined || node.kind !== "spacer" && validPhotos(node.photos))
     &&(node.mapSize===undefined||mapSizeUnits(node.mapSize)!==null)
     &&(node.childrenInRow===undefined||node.childrenInRow===true&&node.kind!=='spacer')
     &&(node.kind===undefined||node.kind==='spacer'&&node.text===''&&node.titleLineCount===undefined&&node.children.length===0);
@@ -464,12 +706,37 @@ const descriptionCSS = String.raw`
 .moa-outliner .head .has-description>textarea[data-role="title"]{min-height:calc(var(--lh) + 4px)}
 .moa-outliner .head .description-field textarea{padding-top:0;min-height:calc(var(--lh) + 4px);font-size:var(--fs);font-weight:var(--fw);color:var(--description-ink)}
 `;
+const photoCSS = `
+.moa-outliner .photo-group{position:relative;display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 2px}
+.moa-outliner .photo-thumb{display:grid;place-items:center;min-width:0;max-width:100%;height:80px;padding:0;border:0;border-radius:6px;overflow:hidden;background:color-mix(in srgb,var(--bg),var(--ink) 8%);color:var(--ink);cursor:zoom-in}
+.moa-outliner .photo-thumb canvas{width:100%;height:100%;object-fit:contain;pointer-events:none}
+.moa-outliner .photo-sortable .photo-thumb{cursor:grab;user-select:none;-webkit-touch-callout:none}
+.moa-outliner .photo-thumb.sorting{opacity:.6;cursor:grabbing}
+.moa-outliner .photo-insertion-line{position:absolute;width:2px;transform:translateX(-50%);border-radius:2px;background:var(--accent);pointer-events:none;z-index:2}
+.moa-outliner .photo-tile{position:relative;max-width:100%}
+.moa-outliner .photo-tile .photo-thumb{width:100%}
+.moa-outliner .photo-delete{position:absolute;right:-3px;top:-3px;width:24px;height:24px;border:1px solid var(--line);box-shadow:0 1px 3px #0004}
+.moa-outliner .photo-cross{display:grid;place-items:center;padding:0;border-radius:50%;background:var(--bg);color:var(--ink);cursor:pointer}
+.moa-outliner .photo-cross::before,.moa-outliner .photo-cross::after{content:"";grid-area:1/1;width:42%;height:2px;border-radius:2px;background:currentColor;transform:rotate(45deg)}
+.moa-outliner .photo-cross::after{transform:rotate(-45deg)}
+.moa-outliner .tw.photo-row>textarea,.moa-outliner .photo-row>.hl{display:none}
+.moa-outliner .photo-thumb span{font-size:12px;overflow:hidden}
+.moa-outliner .photo-viewer{pointer-events:auto;position:fixed;box-sizing:border-box;max-width:none;max-height:none;margin:0;border:0;background:transparent;overflow:hidden;color:var(--ink);--photo-margin:24px;padding:max(var(--photo-margin),env(safe-area-inset-top)) max(var(--photo-margin),env(safe-area-inset-right)) max(var(--photo-margin),env(safe-area-inset-bottom)) max(var(--photo-margin),env(safe-area-inset-left))}
+.moa-outliner.ipad-safari .photo-viewer{--photo-margin:16px}
+.moa-outliner .photo-viewer[open]{display:grid;place-items:center}
+.moa-outliner .photo-viewer::backdrop{background:rgba(0,0,0,.35)}
+.moa-outliner .photo-frame{position:relative;display:grid;row-gap:8px;justify-items:center}
+.moa-outliner .photo-frame button{justify-self:end;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:var(--bg);color:var(--ink);font:24px system-ui;cursor:pointer}
+.moa-outliner .photo-frame canvas{display:block;border-radius:4px}
+.moa-outliner .photo-group [hidden],.moa-outliner .photo-frame [hidden]{display:none}
+.moa-outliner .photo-frame [role=status]:not(:empty){position:absolute;bottom:8px;max-width:100%;padding:4px 8px;background:var(--bg);border-radius:4px;pointer-events:none}
+`;
 const paneExpand = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 11 11\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M10 4V1H7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M1 7V10H4\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>", paneMinimize = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 11 11\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M7 1V4H10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M4 10V7H1\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>", paneToggle = "<svg width=\"18\" height=\"14\" viewBox=\"0 0 18 14\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n    <defs>\n      <filter id=\"ol-tog-glow\" x=\"-80%\" y=\"-20%\" width=\"260%\" height=\"140%\">\n        <feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"1.4\" result=\"blur\"/>\n        <feMerge><feMergeNode in=\"blur\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>\n      </filter>\n    </defs>\n    <rect x=\"0.75\" y=\"0.75\" width=\"16.5\" height=\"12.5\" rx=\"2.25\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n    <line x1=\"6.5\" y1=\"0.75\" x2=\"6.5\" y2=\"13.25\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n  </svg>";
 const menuSeparator = '<div class="sep" role="separator"></div>';
 function textMenuActions(scopes) {
-  const group = (action, verb, suffix) => scopes.map(([scope, label]) =>
-    `<button data-a="${action}" data-scope="${scope}">${verb}${label}${suffix}</button>`).join('');
-  return group('copy', 'Copy', '') + menuSeparator + group('download', 'Export', ' as .txt');
+  const group = (action, verb) => scopes.map(([scope, label]) =>
+    `<button data-a="${action}" data-scope="${scope}">${verb}${label}</button>`).join('');
+  return group('copy', 'Copy') + menuSeparator + group('download', 'Export');
 }
 const template = String.raw`<div class="page">
   <!-- Toolbar. DOM order (breadcrumb, tools, search, menu button) is the wide layout; CSS "order" rearranges it on narrow screens.
@@ -504,18 +771,24 @@ const template = String.raw`<div class="page">
 <!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
 <!-- Owner override: hierarchy styling is automatic and Expand All is the first top menu action. -->
 <!-- Owner override: file import opens first. Copy keeps the clipboard behavior and Export as .txt downloads the same outline text. -->
-<div class="menu" id="ol-topMenu"><button data-a="importFile">Import .txt to Home</button>${menuSeparator}
+<div class="menu" id="ol-topMenu"><button data-a="importFile">Import File</button>${menuSeparator}
 <button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div>${menuSeparator}
 ${textMenuActions([['visible', ' Visible'], ['focus', ' Focus'], ['all', ' All']])}${menuSeparator}<button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="importFile" hidden>Import .txt Here</button><div class="sep" data-group="import" role="separator" hidden></div>
-<button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange children in one row</button>${menuSeparator}<button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button>${menuSeparator}<button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div>
+<div class="menu" id="ol-menu"><button data-a="importFile" hidden>Import File</button><div class="sep" data-group="import" role="separator" hidden></div>
+<button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange children in one row</button>${menuSeparator}<button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button type="button" data-a="addPhoto" hidden>Add Photo</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button>${menuSeparator}<button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div>
 ${textMenuActions([['visible', ' Visible'], ['node', '']])}${menuSeparator}<button data-a="delete">Delete</button></div>
-<input id="ol-import-file" type="file" accept=".txt,text/plain" hidden>
+<input id="ol-import-file" type="file" accept=".txt,.zip,text/plain,application/zip" hidden>
+<input id="ol-photo-file" type="file" accept="image/*" multiple hidden>
+<dialog class="photo-viewer" aria-label="Photo viewer"><div class="photo-frame"><button class="photo-cross" type="button" aria-label="Close photo"></button><canvas role="img" aria-label="Enlarged photo" hidden></canvas><span role="status"></span></div></dialog>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
-function encodeNodeText(node, depth, version = 1) {
-  const parts = splitNodeText(node.text, node.titleLineCount), lines = parts.hasDescription ? parts.description.split('\n') : [], prefix = '  '.repeat(depth), out = [prefix + '- ' + (version >= 3 ? JSON.stringify(parts.title) : parts.title)];
+function encodeNodeText(node, depth, version, titleOverride) {
+  const parts = splitNodeText(node.text, node.titleLineCount);
+  const title = titleOverride ?? parts.title;
+  const lines = parts.hasDescription ? parts.description.split('\n') : [];
+  const prefix = '  '.repeat(depth);
+  const out = [prefix + '- ' + (version >= 3 ? JSON.stringify(title) : title)];
   if (lines.length) {
     const bodyPrefix = prefix + '  ';
     out.push(bodyPrefix + '[desc]');
@@ -642,7 +915,7 @@ const timers = new Set(), frames = new Set(), listeners = new WeakMap(), globalL
 const hadHostClass = container.classList.contains('moa-outliner');
 container.classList.add('moa-outliner');
 if (ipadSafari) container.classList.add('ipad-safari');
-const style = document.createElement('style'); style.textContent = presentationCSS + depthCSS + css + descriptionCSS + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
+const style = document.createElement('style'); style.textContent = photoCSS + presentationCSS + depthCSS + css + descriptionCSS + (ipadSafari ? ipadCSS : '') + (opts.paneControls ? paneCSS : '') + (integratedHeader ? headerCSS : '');
 const fragment = document.createElement('template'); fragment.innerHTML = originalHeader + template;
 const ownedNodes = [...fragment.content.childNodes];
 container.append(style, fragment.content);
@@ -680,6 +953,7 @@ listen(document, 'focusin', trackHistoryContext, true);
 listen(container, 'compositionstart', () => { historyComposing = true; }, true);
 listen(container, 'compositionend', () => { historyComposing = false; }, true);
 function ownsEvent(e, historyShortcut = false) {
+  if (photoDialog.open || e.target?.closest?.(".photo-viewer")) return false;
   if (!visibleHost()) return false;
   if (headerSlot?.contains(e.target) || e.target?.closest?.('#ol-menu input,.depth-controls')) return false;
   if (container.contains(e.target)) return true;
@@ -688,6 +962,7 @@ function ownsEvent(e, historyShortcut = false) {
 }
 function destroy() {
   if (destroyed) return;
+  cancelPhotoSort(); cleanupViewer(); photoObserver.disconnect(); photoService.close();
   depthController?.dispose();endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
@@ -869,11 +1144,12 @@ function load() {
       while (stack.length) {
         const n = stack.pop();
         if (!n || !Number.isSafeInteger(n.id) || ids.has(n.id) || typeof n.text !== 'string' || typeof n.open !== 'boolean' || !Array.isArray(n.children)) throw new Error('Invalid outline');
-        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined||n.titleLineCount!==undefined||n.childrenInRow!==undefined))throw new Error('Invalid outline presentation');
+        if(!validPresentation(n)||n===d.root&&(n.kind!==undefined||n.mapSize!==undefined||n.titleLineCount!==undefined||n.childrenInRow!==undefined||n.photos!==undefined))throw new Error('Invalid outline presentation');
         if(n.titleLineCount===1)delete n.titleLineCount;
         if(n.mapSize!==undefined)n.mapSize=mapSizeUnits(n.mapSize)/MAP_SIZE_UNITS;if(n.mapSize===1)delete n.mapSize;ids.add(n.id); for (const child of n.children) stack.push(child);
       }
       root = updateUidFromTree(d.root);
+      separatePhotoText(root);
       zoom = find(root, d.zoom) || root;
       loadedPresentationSnapshot=snap();
       return;
@@ -897,7 +1173,7 @@ function realChildren(node) {
   return node === phOwner && children.length === 1 && children[0] === phNode && !phNode.text && !phNode.children.length ? [] : children;
 }
 function canMarkSpacer(node) {
-  return node.kind !== 'spacer' && !realChildren(node).length && !node.text.includes('\n') && /^[\s\u200b]*$/u.test(node.text);
+  return node.kind !== 'spacer' && !node.photos && !realChildren(node).length && !node.text.includes('\n') && /^[\s\u200b]*$/u.test(node.text);
 }
 // A saved leaf may be closed. Its first real child opens it in the same edit.
 function openPlaceholderOwner(node) {
@@ -1138,6 +1414,7 @@ function refreshNodeEditor(binding) {
   host.classList.toggle('has-description', parts.hasDescription);
   host.classList.toggle('spacer-editor',n.kind==='spacer');title.placeholder=n.kind==='spacer'?'Spacer':head?'Untitled':'';
   updateBadge(host,n);
+  syncPhotoRow(binding);
   if (parts.hasDescription && !binding.description) {
     const field = el('div', 'description-field'), t = el('textarea'); setLevel(field, REGULAR_LEVEL);
     t.rows = 1; t.spellcheck = false; t.dataset.role = 'description'; t.dataset.id = n.id;
@@ -1185,6 +1462,7 @@ function updateEditorBadge(binding,node){
   }
 }
 function focusEditor(binding, pos) {
+  if (binding.getNode().photos) { binding.photos?.querySelector("button")?.focus(); return; }
   const n = binding.getNode(), p = pos == null ? n.text.length : Math.max(0, Math.min(pos, n.text.length)), parts = splitNodeText(n.text,n.titleLineCount);
   const desc = parts.hasDescription && p > parts.title.length, t = desc ? binding.description : binding.title, local = desc ? p - parts.title.length - 1 : p;
   if (!t) return; t.focus(); t.setSelectionRange(local, local);
@@ -1226,6 +1504,15 @@ function bindField(binding, t) {
     if (intent.kind === 'newline') {
       t.setRangeText('\n', t.selectionStart, t.selectionEnd, 'end');
       writeField(); refreshNodeEditor(binding); if (binding.head) crumbs(); save(true);
+    } else if (intent.kind === 'firstChild') {
+      record();
+      const child = phOwner === n && !realChildren(n).length ? phNode : mk();
+      if (child === phNode) promotePresentation(child);
+      else n.children.unshift(child);
+      clearSpacerKind(n);
+      n.open = true;
+      if (searching()) { sKeep.add(child); sOver.set(n, true); }
+      render(child.id, 0);
     } else if (intent.kind === 'navigate') {
       if (range.role === 'description' && t.selectionStart !== t.selectionEnd) {
         t.setRangeText('', t.selectionStart, t.selectionEnd, 'end');writeField();refreshNodeEditor(binding);crumbs();save(true);
@@ -1347,7 +1634,7 @@ function render(focusId, pos) {
   // Drop selection / anchor entries that are gone or outside the current view; a stale selection used to swallow Enter, Delete and Tab.
   for (const n of [...sel]) { let x = n; while (x && x !== zoom) x = par.get(x); if (!x) sel.delete(n); }
   if (anchor && !par.has(anchor)) anchor = null; if (cursor && !par.has(cursor)) cursor = null;
-  els.clear(); const tree = container.querySelector('#ol-tree'); tree.innerHTML = '';
+  els.clear(); const tree = container.querySelector('#ol-tree'); removePhotoPreviews(tree); tree.innerHTML = '';
   if (searching()) computeSets();
   const children = shownKids(zoom);
   if (zoom !== root && !isOpen(zoom) && realChildren(zoom).length) { sel.clear(); anchor = cursor = null; }
@@ -1537,9 +1824,9 @@ function enterIntent(n, t, head = false) {
   const text=joinNodeText(parts);
   const result=kind=>({kind,text,start,parts});
   if (t.role === 'description') return result(start < text.length ? 'newline' : head ? 'navigate' : 'insert');
-  if (head) return result('navigate');
+  if (head) return result(start === end && start === original.title.length ? 'firstChild' : 'navigate');
   // Explicit spacers insert below; ordinary empty rows keep their existing rules.
-  if (n.kind === 'spacer') return result('insert');
+  if (n.kind === 'spacer' || n.photos && !text) return result('insert');
   if (!text && !n.children.length && par.get(n) !== zoom) return result('outdent');
   return result(start === 0 || start < parts.title.length ? 'split' : 'insert');
 }
@@ -1651,7 +1938,7 @@ function syncPresentationMenu(){
   childRowToggle.hidden=menuNode.kind==='spacer'||menuNode===phNode;
   childRowToggle.setAttribute('aria-pressed',String(menuNode.childrenInRow===true));
   container.querySelector('#ol-size-down').disabled=value<=MIN_MAP_SIZE;container.querySelector('#ol-size-up').disabled=value>=MAX_MAP_SIZE;
-  menu.querySelector('[data-a="description"]').hidden=menuNode.kind==='spacer'||splitNodeText(menuNode.text,menuNode.titleLineCount).hasDescription;
+  menu.querySelector('[data-a="description"]').hidden=!!menuNode.photos||menuNode.kind==='spacer'||splitNodeText(menuNode.text,menuNode.titleLineCount).hasDescription;
   menu.querySelector('[data-a="removeSpacer"]').hidden=menuNode.kind!=='spacer';
   menu.querySelector('[data-a="spacer"]').textContent=canMarkSpacer(menuNode)?'Mark as Spacer':'Insert Spacer Below';
 }
@@ -1765,6 +2052,9 @@ function setPinnedFocus(nodeId) {
 }
 function syncMenuActions(){
   const n=menuNode;
+  const photoAction = menu.querySelector('[data-a="addPhoto"]'), placement = photoPlacement(n);
+  photoAction.hidden = !placement;
+  photoAction.textContent = placement === 'below' ? 'Insert Photo Below' : 'Add Photo';
   const importHidden = !canImportInto(n);
   menu.querySelector('[data-a="importFile"]').hidden = importHidden;
   menu.querySelector('[data-group="import"]').hidden = importHidden;
@@ -1795,6 +2085,7 @@ menu.onclick = e => {
     return;
   }
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
+  else if (a === 'addPhoto') choosePhoto(menuNode);
   else if (a === 'delete') delItems(menuT);
   else if (a === 'importFile') chooseOutlineFile(menuNode);
   else if (a === 'copy' || a === 'download') outputOutlineText(e.target, menuT);
@@ -1819,7 +2110,9 @@ function keys(e, n, t) {
     e.preventDefault(); enter(n, t); return;
   }
   if (e.key === 'Backspace' && pos === 0 && end === 0) {
+    if (n.photos) { e.preventDefault(); return; }
     const list = vis(), i = list.indexOf(n), prev = list[i - 1];
+    if (prev?.photos && !n.children.length) { e.preventDefault(); return; }
     if (!n.children.length && prev) {
       e.preventDefault();
       const at = prev.text.length, left=splitNodeText(prev.text,prev.titleLineCount), right=splitNodeText(n.text,n.titleLineCount);
@@ -1879,12 +2172,23 @@ function placeItems(items, target, replaceEmpty) {
   return peers.at(-1) ?? target;
 }
 function insertItems(items, target, replaceEmpty) {
-  const last = placeItems(items, target, replaceEmpty && !target.text.trim() && !target.children.length);
+  const last = placeItems(items, target, replaceEmpty && !target.photos && !target.text.trim() && !target.children.length);
   if (searching()) { sKeep.add(target); items.forEach(i => sKeep.add(i)); }
   sel.clear(); render(last.id);
 }
+// Older documents allowed captions on the same node. Keep their text and children.
+function separatePhotoText(node) {
+  for (const child of node.children) separatePhotoText(child);
+  if (!node.photos || !node.text) return;
+  const child = mk();
+  child.photos = node.photos;
+  if (node.mapSize !== undefined) child.mapSize = node.mapSize;
+  delete node.photos;
+  node.children.unshift(child);
+}
 function instantiateOutlineItem(item) {
   const node = copyPresentation(item, mk(item.text));
+  if (typeof item.open === "boolean") node.open = item.open;
   node.children = item.children.map(instantiateOutlineItem);
   return node;
 }
@@ -1914,7 +2218,7 @@ listen(document, 'paste', e => {
 const outlineFileInput = container.querySelector('#ol-import-file');
 let pendingFileTarget, fileRequest = 0;
 function canImportInto(node) {
-  return !!node && par.has(node) && node.kind !== 'spacer' && !node.text.includes('\n') &&
+  return !!node && par.has(node) && node.kind !== 'spacer' && !node.photos && !node.text.includes('\n') &&
     !node.text.trim() && !realChildren(node).length;
 }
 function chooseOutlineFile(target) {
@@ -1931,23 +2235,37 @@ listen(outlineFileInput, 'change', async () => {
   pendingFileTarget = undefined;
   outlineFileInput.value = '';
   if (!file || target === undefined) return;
-  if (!/\.txt$/i.test(file.name)) { toast('Choose a .txt file'); return; }
+  const zip = /\.zip$/i.test(file.name);
+  if (!zip && !/\.txt$/i.test(file.name)) { toast('Choose an outline text or project file'); return; }
+  if (zip && file.size > photoZipLimit) { toast('This project file is too large'); return; }
   const currentRequest = () => !destroyed && request === fileRequest;
-  let items;
+  let items, assets;
   try {
     const bytes = await file.arrayBuffer();
     if (!currentRequest()) return;
-    const source = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
-    const decoded = decodeDescriptionOutline(source, true);
-    if (decoded.attempted && !decoded.recognized) { toast('Invalid or unsupported outline interchange document'); return; }
-    items = decoded.recognized ? decoded.items.map(instantiateOutlineItem) : parseOutline(source);
+    if (zip) {
+      const project = await readPhotoOutline(bytes, currentRequest);
+      if (!project || !currentRequest()) return;
+      items = project.items.map(instantiateOutlineItem); items.forEach(separatePhotoText); assets = project.assets;
+    } else {
+      const source = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+      const decoded = decodeDescriptionOutline(source, true);
+      if (decoded.attempted && !decoded.recognized) { toast('Invalid or unsupported outline interchange document'); return; }
+      items = decoded.recognized ? decoded.items.map(instantiateOutlineItem) : parseOutline(source);
+    }
   } catch (_) {
-    if (currentRequest()) toast('Could not read the file as UTF-8 text');
+    if (currentRequest()) toast(zip ? 'Invalid or unsupported project ZIP' : 'Could not read the file as UTF-8 text');
     return;
   }
   if (!items.length) { toast('This text file is empty'); return; }
   if (historyComposing) { toast('Finish typing and try importing again'); return; }
   if (target && !canImportInto(target)) { toast('The import target is no longer empty or available'); return; }
+  if (assets) {
+    try { await photoService.write(assets); }
+    catch (_) { if (currentRequest()) toast('Could not store the photos. The outline was not changed.'); return; }
+    if (!currentRequest()) return;
+    if (historyComposing || target && !canImportInto(target)) { toast('The import target is no longer available'); return; }
+  }
   record();
   const destination = target ?? root;
   // A transient typing row is only a placeholder until its owner gains real content.
@@ -1956,13 +2274,14 @@ listen(outlineFileInput, 'change', async () => {
     phNode = phOwner = null;
   }
   placeItems(items, target, !!target);
+  if (zip && target) target.open = items[0].open;
   if (target && searching()) {
     sKeep.add(target);
     items.slice(1).forEach(node => sKeep.add(node));
   }
   depthController?.invalidate();
   render();
-  toast(target ? 'Imported here' : 'Imported to Home');
+  toast(target ? 'Imported here' : 'Imported to Home', baseToastDuration);
 });
 
 // REQUIREMENT: export text is always 2-space indent and a "- " prefix. Not configurable. visible=true skips children of collapsed bullets.
@@ -1972,7 +2291,7 @@ listen(outlineFileInput, 'change', async () => {
 function toText(list, visible) {
   return serializeOutline(list, visible).text;
 }
-function serializeOutline(list, visible) {
+function serializeOutline(list, visible, photoMarkers = false) {
   const entries=[];
   (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;entries.push({n,d});w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
   let extended=false,codecVersion=1;
@@ -1981,16 +2300,36 @@ function serializeOutline(list, visible) {
     else if(n.titleLineCount>1){extended=true;codecVersion=Math.max(3,codecVersion);}
     else if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(codecVersion<2&&(units>100000||units%100))codecVersion=2;}
   }
-  const out=entries.map(({n,d})=>{const encoded=encodeNodeText(n,d,codecVersion).split('\n');
+  const out=entries.map(({n,d})=>{
+    const photoCount = photoMarkers ? n.photos?.length : 0;
+    const photoTitle = photoCount === 1 ? '[Photo]' : photoCount > 1 ? `[${photoCount} photos]` : undefined;
+    const encoded=encodeNodeText(n,d,codecVersion,photoTitle).split('\n');
     if(n.kind==='spacer'||(n.mapSize??1)!==1||n.childrenInRow){
       encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+(n.childrenInRow?' children=row':'')+']');
     }
     return encoded.join('\n');});
   const body = out.join('\n');
-  return {text: extended ? '[moa v='+codecVersion+']\n'+body+'\n[/moa]' : body, first: entries[0]?.n};
+  return {text: extended ? '[moa v='+codecVersion+']\n'+body+'\n[/moa]' : body, first: entries[0]?.n, entries};
 }
-const toastEl = container.querySelector('#ol-toast'); let toastT;
-function toast(m) { if (destroyed) return; toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 1400); }
+const toastEl = container.querySelector('#ol-toast');
+const baseToastDuration = 1400;
+const maxWarningDuration = 3500;
+const shortestWarning = 'Copy failed';
+const photoAddWarning = 'Could not add photo. Check the format, size, and browser storage.';
+let toastT;
+function warningDuration(message) {
+  // The general photo-add warning is the longest built-in timed warning.
+  const range = photoAddWarning.length - shortestWarning.length;
+  const fraction = Math.min(1, Math.max(0, (message.length - shortestWarning.length) / range));
+  return Math.round(baseToastDuration + fraction * (maxWarningDuration - baseToastDuration));
+}
+function toast(message, duration = warningDuration(message)) {
+  if (destroyed) return;
+  toastEl.textContent = message;
+  toastEl.classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => toastEl.classList.remove('show'), duration);
+}
 async function copyText(s) {
   if (destroyed) return false;
   try { await navigator.clipboard.writeText(s); return !destroyed; } catch (e) {}
@@ -2006,30 +2345,38 @@ function outlineFileName(first) {
   const clean = title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
   const name = [...clean].slice(0, 80).join('').replace(/[. ]+$/, '') || 'Outline';
   const reserved = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(name);
-  return (reserved ? '_' : '') + name + '.txt';
+  return (reserved ? '_' : '') + name;
 }
 async function outputOutlineText(button, list) {
   const {a, scope} = button.dataset;
   try {
-    const {text, first} = serializeOutline(scope === 'all' ? root.children : list, scope === 'visible');
+    const {text, first, entries} = serializeOutline(scope === 'all' ? root.children : list, scope === 'visible', a === 'copy');
+    const hasPhotos = entries.some(({n}) => n.photos);
     if (!text) { toast(a === 'copy' ? 'Nothing to copy' : 'Nothing to export'); return; }
-    if (a === 'copy') { toast(await copyText(text) ? 'Copied to clipboard' : 'Copy failed'); return; }
+    if (a === 'copy') {
+      if (!await copyText(text)) toast(shortestWarning);
+      else if (hasPhotos) toast('Copied text. Use Export to include photos.');
+      else toast('Copied to clipboard', baseToastDuration);
+      return;
+    }
 
     const link = document.createElement('a');
     link.hidden = true;
-    link.download = outlineFileName(first);
-    const url = URL.createObjectURL(new Blob([text], {type: 'text/plain;charset=utf-8'}));
+    link.download = outlineFileName(first) + (hasPhotos ? '.zip' : '.txt');
+    const blob = hasPhotos ? await exportPhotoOutline(entries) : new Blob([text], {type: 'text/plain;charset=utf-8'});
+    if (destroyed) return;
+    const url = URL.createObjectURL(blob);
     textDownloadUrls.add(url);
     try {
       link.href = url;
       container.appendChild(link);
       link.click();
-      toast('Download started');
+      toast('Download started', baseToastDuration);
     } finally {
       link.remove();
       setTimeout(() => { URL.revokeObjectURL(url); textDownloadUrls.delete(url); }, 1500);
     }
-  } catch (_) { toast(a === 'copy' ? 'Copy failed' : 'Could not export the text file'); }
+  } catch (error) { toast(a === 'copy' ? shortestWarning : error.message || 'Could not export the file'); }
 }
 // Escape closes whichever menu is open (top menu or bullet menu).
 listen(document, 'keydown', e => { if (!ownsEvent(e)) return; if (e.key === 'Escape') { topMenu.classList.remove('show'); menu.classList.remove('show'); } });
@@ -2271,7 +2618,7 @@ function clearAll() {
   saveBlocked = false;
   const wasSearching = searching(); endSearch();
   if (!wasSearching) render();
-  toast('Cleared');
+  toast('Cleared', baseToastDuration);
 }
 
 // Only these toolbar buttons (class kb) cancel mousedown so the caret stays in the bullet. That is original behaviour; do not extend it to other controls.
@@ -2326,7 +2673,11 @@ listen(document, 'keydown', e => {
   else if (e.key === 'Escape') { setSel(new Set()); if (anchor) focusNode(anchor.id); }
   else if (mod && (k === 'c' || k === 'x')) { e.preventDefault(); const it = roots(), cutSnapshot = k === 'x' ? JSON.stringify(it) : null;
     // Cut removes the bullets ONLY after the copy succeeded (the copy is asynchronous and can be refused).
-    copyText(toText(it)).then(ok => {
+    const {text, entries} = serializeOutline(it, false, true);
+    const hasPhotos = entries.some(({n}) => n.photos);
+    if (k === 'x' && hasPhotos) { toast('Use Export to keep photos before moving this branch.'); return; }
+    copyText(text).then(ok => {
+      if (ok && hasPhotos) toast('Copied text. Use Export to include photos.');
       if (destroyed || k !== 'x') return;
       if (!ok) { toast('Copy failed, nothing was cut'); return; }
       const live = it.filter(n => par.has(n));
@@ -2425,6 +2776,12 @@ listen(window, 'blur', () => { lastOwnedInteraction = false; if (dragFrom || mul
 const qBox = container.querySelector('#ol-qBox'), qIn = container.querySelector('#ol-qIn');
 const searchAction = container.querySelector('#ol-qx');
 let searchComposing = false, searchPressBlocked = false;
+let searchExitPending = false, searchExitTimer = 0, searchExitPointer = null;
+function cancelSearchExit() {
+  searchExitPending = false;
+  clearTimeout(searchExitTimer);
+  searchExitTimer = 0;
+}
 function syncSearchAction() {
   if (!integratedHeader) return;
   const active = searching();
@@ -2433,26 +2790,83 @@ function syncSearchAction() {
   searchAction.setAttribute('aria-label', searchAction.title);
 }
 function startSearch(v) {
+  cancelSearchExit();
   v = v.trim(); if (!v) { endSearch(); return; }
   const changed=sq!==v;
   depthController?.invalidate();
+  if (integratedHeader) qIn.value = v;
   sq = v; sOver.clear(); sKeep.clear(); sel.clear(); qBox.classList.add('on'); qIn.blur(); syncSearchAction(); render();
   if(changed)emit('search',{query:sq});
 }
 function endSearch() {
+  cancelSearchExit();
   const was = searching();
   sq = ''; sShown.clear(); sAnc.clear(); sOver.clear(); sKeep.clear(); qIn.value = ''; qBox.classList.remove('on'); syncSearchAction();
   if (was) { sel.clear(); render(); emit('search',{query:sq}); }
+}
+function commitSearchExit() {
+  if (!searchExitPending || searchComposing || searchExitPointer !== null) return;
+  cancelSearchExit();
+  const query = qIn.value.trim();
+  if (query === sq) { qIn.value = query; return; }
+
+  // The destination action already ran. Keep its field if the new results still show it.
+  const field = document.activeElement;
+  const node = field?.matches('#ol-tree textarea[data-id]') && treeEl.contains(field) ? find(root, +field.dataset.id) : null;
+  const range = node && [field.selectionStart, field.selectionEnd, field.selectionDirection];
+  startSearch(query);
+  if (!field?.isConnected && node && document.activeElement === document.body) {
+    const replacement = els.get(node)?.querySelector(`textarea[data-role="${field.dataset.role}"]`);
+    if (replacement) {
+      replacement.focus({preventScroll: true});
+      replacement.setSelectionRange(...range);
+    }
+  }
+}
+function scheduleSearchExit(delay = 0) {
+  clearTimeout(searchExitTimer);
+  searchExitTimer = setTimeout(() => {
+    searchExitTimer = 0;
+    commitSearchExit();
+  }, delay);
 }
 function getSearchQuery(){return sq;}
 listen(qIn, 'keydown', e => {
   if (e.isComposing || e.keyCode === 229 || searchComposing) return;
   if (e.key === 'Enter') { e.preventDefault(); startSearch(qIn.value); }
-  else if (e.key === 'Escape' && searching()) { e.preventDefault(); endSearch(); }
+  else if (e.key === 'Escape' && (searching() || (integratedHeader && qIn.value))) { e.preventDefault(); endSearch(); }
 });
 if (integratedHeader) {
   listen(qIn, 'compositionstart', () => { searchComposing = true; });
-  listen(qIn, 'compositionend', () => { searchComposing = false; });
+  listen(qIn, 'compositionend', () => {
+    searchComposing = false;
+    if (searchExitPending && searchExitPointer === null) scheduleSearchExit();
+  });
+  listen(qBox, 'focusin', cancelSearchExit);
+  listen(qBox, 'focusout', e => {
+    if (qBox.contains(e.relatedTarget) || (!searchComposing && qIn.value === sq)) return;
+    searchExitPending = true;
+    if (searchExitPointer === null) scheduleSearchExit();
+  });
+  listen(document, 'pointerdown', e => {
+    if (!e.isPrimary || !qBox.contains(document.activeElement) || qBox.contains(e.target)) return;
+    searchExitPointer = e.pointerId;
+  }, true);
+  function releaseSearchPointer(e) {
+    if (searchExitPointer !== e.pointerId) return;
+    searchExitPointer = null;
+    // A completed click normally settles first. Also settle blur from a canceled or dragged press.
+    if (searchExitPending) scheduleSearchExit(e.type === 'pointerup' ? 350 : 0);
+  }
+  listen(document, 'pointerup', releaseSearchPointer, true);
+  listen(document, 'pointercancel', releaseSearchPointer, true);
+  listen(window, 'blur', () => {
+    searchExitPointer = null;
+    if (searchExitPending) scheduleSearchExit();
+  });
+  listen(document, 'click', () => {
+    if (!qBox.contains(document.activeElement)) commitSearchExit();
+  });
   listen(searchAction, 'pointerdown', () => { searchPressBlocked = searchComposing; });
   listen(searchAction, 'pointercancel', () => { searchPressBlocked = false; });
   listen(searchAction, 'keydown', e => { if (e.key === 'Enter' || e.key === ' ') searchPressBlocked = searchComposing || e.isComposing || e.keyCode === 229; });
@@ -2532,7 +2946,7 @@ listen(container, 'touchstart', e => {
   if (e.touches.length !== 1) { cancelTouch('second finger'); return; }
   if (!ipadSafari) return;
   cancelTouch('new contact'); blockClickUntil = 0;
-  const row = e.target.closest('.row'), excluded = e.target.closest('.arrow,.dots,.menu');
+  const row = e.target.closest('.row'), excluded = e.target.closest('.arrow,.dots,.menu,.photo-delete,.photo-sortable .photo-thumb');
   if (!row || excluded || historyComposing || neutralComposing || destroyed) return;
   const textarea = row.contains(document.activeElement) && document.activeElement.matches('textarea[data-id]') ? document.activeElement : row.querySelector('textarea');
   // Eligibility captured before any browser focus default. Never blur/refocus.
@@ -2600,6 +3014,393 @@ listen(container, 'dragstart', e => {
   if (touchGesture) { e.preventDefault(); e.stopImmediatePropagation(); }
 }, true);
 
+async function exportPhotoOutline(entries) {
+  const photos = new Map(), nodes = entries.map(({n, d}) => {
+    n.photos?.forEach(photo => photos.set(photo.id, photo));
+    return copyPresentation(n, {depth: d, text: n.text, open: n.open});
+  });
+  const manifest = new Blob([JSON.stringify({version: 1, nodes})]);
+  const files = new Map([['outline.json', manifest]]);
+  let total = manifest.size;
+  for (const id of photos.keys()) {
+    const asset = await photoService.read(id);
+    if (!asset?.detail) throw new Error('A photo is unavailable. Export canceled.');
+    total += asset.detail.size;
+    if (total > photoZipLimit) throw new Error('Choose a smaller outline section to export');
+    const extension = asset.detail.type === 'image/jpeg' ? 'jpg' : 'png';
+    files.set(`images/${id}.${extension}`, asset.detail);
+  }
+  return writePhotoZip(files);
+}
+
+async function readPhotoOutline(buffer, current) {
+  const files = readPhotoZip(buffer);
+  const {version, nodes} = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(files.get('outline.json')));
+  const invalid = () => { throw new Error('Invalid or unsupported project ZIP'); };
+  if (version !== 1 || !Array.isArray(nodes) || !nodes.length) invalid();
+  const items = [], stack = [], photos = new Map();
+  for (const data of nodes) {
+    if (!data || !Number.isInteger(data.depth) || data.depth < 0 || data.depth > stack.length || data.depth > 500 ||
+        typeof data.text !== 'string' || typeof data.open !== 'boolean') invalid();
+    const item = {...data, children: []};
+    if (!validPresentation(item)) invalid();
+    const parent = stack[data.depth - 1];
+    if (parent?.kind === 'spacer') invalid();
+    (parent?.children || items).push(item);
+    stack.length = data.depth;
+    stack.push(item);
+    for (const photo of item.photos || []) {
+      const previous = photos.get(photo.id);
+      if (previous && (previous.width !== photo.width || previous.height !== photo.height)) invalid();
+      photos.set(photo.id, photo);
+    }
+  }
+  if (!photos.size || files.size !== photos.size + 1) invalid();
+  const assets = [], remapped = new Map();
+  for (const [id, photo] of photos) {
+    if (!current()) return null;
+    const jpeg = files.get(`images/${id}.jpg`), png = files.get(`images/${id}.png`);
+    if (jpeg && png) invalid();
+    const data = jpeg || png, type = jpeg ? 'image/jpeg' : 'image/png';
+    if (!data || data.length > 12 * 1024 * 1024) invalid();
+    const dimensions = photoDimensions(data, type);
+    if (!dimensions || dimensions.width !== photo.width || dimensions.height !== photo.height) invalid();
+    const detail = new Blob([data], {type}), image = await decodePhoto(detail);
+    try {
+      if (image.naturalWidth !== photo.width || image.naturalHeight !== photo.height) invalid();
+      const fresh = newPhotoId(), {blob: thumb} = await resizePhoto(image, 320, type);
+      assets.push([fresh, {detail, thumb}]); remapped.set(id, fresh);
+    } finally { image.src = ''; }
+  }
+  for (const item of nodes) if (item.photos) item.photos.forEach(photo => { photo.id = remapped.get(photo.id); });
+  return {items, assets};
+}
+
+const photoService = createPhotoService();
+const photoDialog = container.querySelector('.photo-viewer');
+const photoFrame = photoDialog.querySelector('.photo-frame');
+const photoPreview = photoFrame.querySelector('canvas');
+const photoStatus = photoFrame.querySelector('[role=status]');
+const photoClose = photoDialog.querySelector('button');
+const visiblePhotos = new Map();
+let viewerLease, viewerThumb, viewerOrigin, viewerRevision = 0, photoTarget, photoRequest = 0;
+let photoProcessing = false;
+
+function paintPreview(canvas, image) {
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  canvas.getContext('2d').drawImage(image, 0, 0);
+}
+
+function stopPhotoPreview(button) {
+  const current = visiblePhotos.get(button);
+  if (!current) return;
+  current.lease?.release();
+  current.lease = null;
+  current.canvas.width = current.canvas.height = 1;
+  current.canvas.hidden = true;
+}
+
+const photoObserver = new IntersectionObserver(entries => {
+  for (const {target, isIntersecting} of entries) {
+    const current = visiblePhotos.get(target);
+    if (!current) continue;
+    if (!isIntersecting) { stopPhotoPreview(target); continue; }
+    if (current.lease) continue;
+    const lease = current.lease = photoService.acquire(current.photo, 'thumb');
+    lease.ready.then(image => {
+      if (current.lease !== lease) return;
+      paintPreview(current.canvas, image);
+      current.canvas.hidden = false;
+      current.status.hidden = true;
+    }).catch(() => {
+      if (current.lease === lease) current.status.hidden = false;
+    });
+  }
+});
+
+function removePhotoPreviews(group) {
+  if (photoSort && group.contains(photoSort.button)) cancelPhotoSort();
+  for (const button of group.querySelectorAll('.photo-thumb')) {
+    photoObserver.unobserve(button);
+    stopPhotoPreview(button);
+    visiblePhotos.delete(button);
+  }
+}
+
+function cleanupViewer() {
+  viewerRevision++;
+  viewerLease?.release(); viewerLease = null;
+  viewerThumb?.release(); viewerThumb = null;
+  photoPreview.width = photoPreview.height = 1;
+  photoPreview.hidden = true;
+}
+
+function sizeViewer() {
+  if (!photoDialog.open) return;
+  const viewport = window.visualViewport;
+  photoDialog.style.inset = 'auto';
+  Object.assign(photoDialog.style, {left: `${viewport?.offsetLeft ?? 0}px`, top: `${viewport?.offsetTop ?? 0}px`,
+    width: `${viewport?.width ?? innerWidth}px`, height: `${viewport?.height ?? innerHeight}px`});
+  const style = getComputedStyle(photoDialog);
+  const availableWidth = photoDialog.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const availableHeight = photoDialog.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - 52;
+  const {width, height} = viewerOrigin.photo;
+  const scale = Math.max(0, Math.min(1, availableWidth / width, availableHeight / height));
+  photoFrame.style.width = `${Math.max(44, width * scale)}px`;
+  photoPreview.style.width = `${width * scale}px`;
+  photoPreview.style.height = `${height * scale}px`;
+}
+
+function openPhotoViewer(button, photo, node) {
+  if (photoDialog.open || historyComposing || touchGesture?.active || (ipadSafari && performance.now() < blockClickUntil)) return;
+  cleanupViewer();
+  viewerOrigin = {button, photo, node};
+  const revision = viewerRevision;
+  photoStatus.textContent = '';
+  photoPreview.hidden = false;
+  topMenu.classList.remove('show'); menu.classList.remove('show');
+  button.focus({preventScroll: true});
+  photoDialog.showModal();
+  sizeViewer();
+  photoClose.focus({preventScroll: true});
+  let detailed = false;
+  viewerThumb = photoService.acquire(photo, 'thumb');
+  viewerThumb.ready.then(image => {
+    if (revision !== viewerRevision || detailed) return;
+    paintPreview(photoPreview, image); photoPreview.hidden = false;
+  }).catch(() => {});
+  viewerLease = photoService.acquire(photo, 'detail');
+  viewerLease.ready.then(image => {
+    if (revision !== viewerRevision) return;
+    detailed = true;
+    paintPreview(photoPreview, image); photoPreview.hidden = false;
+    viewerThumb?.release(); viewerThumb = null;
+  }).catch(() => { if (revision === viewerRevision) photoStatus.textContent = 'Larger image unavailable'; });
+}
+
+listen(photoClose, 'click', () => photoDialog.close());
+listen(photoDialog, 'keydown', event => event.stopPropagation());
+let backdropPressed = false;
+listen(photoDialog, 'pointerdown', event => { backdropPressed = event.target === photoDialog; });
+listen(photoDialog, 'click', event => { if (backdropPressed && event.target === photoDialog) photoDialog.close(); });
+listen(photoDialog, 'close', () => {
+  cleanupViewer();
+  const origin = viewerOrigin;
+  viewerOrigin = null;
+  if (!origin || destroyed) return;
+  const row = els.get(origin.node);
+  const control = origin.button.isConnected ? origin.button : row?.querySelector('.photo-thumb, .more') ||
+    (zoom === origin.node ? headControls?.more : null) || container.querySelector('.row .more');
+  control?.focus({preventScroll: true});
+});
+listen(window, 'resize', sizeViewer);
+if (window.visualViewport) listen(window.visualViewport, 'resize', sizeViewer);
+if (window.visualViewport) listen(window.visualViewport, 'scroll', sizeViewer);
+
+const remainingPhotoSlots = node => MAX_PHOTOS - (node.photos?.length ?? 0);
+
+function photoPlacement(node) {
+  if (!node || !par.has(node) || node.kind === 'spacer') return null;
+  if (node.photos) return remainingPhotoSlots(node) > 0 ? 'here' : null;
+  if (canImportInto(node)) return 'here';
+  return node.text.trim() ? 'below' : null;
+}
+
+function choosePhoto(node) {
+  const placement = photoPlacement(node);
+  if (historyComposing || photoProcessing || !placement) return;
+  photoTarget = {node, placement};
+  photoRequest++;
+  photoInput.value = '';
+  try { photoInput.click(); }
+  catch (_) { photoTarget = null; toast('Could not open the photo picker'); }
+}
+
+function commitPhotoChange(node, update) {
+  record();
+  promotePresentation(node);
+  update();
+  const sheet = container.querySelector('.sheet'), scrollTop = sheet.scrollTop;
+  render();
+  sheet.scrollTop = scrollTop;
+}
+
+const photoInput = container.querySelector('#ol-photo-file');
+listen(photoInput, 'cancel', () => { photoTarget = null; });
+listen(photoInput, 'change', async () => {
+  const files = Array.from(photoInput.files), target = photoTarget, request = photoRequest;
+  photoTarget = null; photoInput.value = '';
+  if (!files.length || !target || photoProcessing) return;
+  const {node, placement} = target;
+  const capacity = remainingPhotoSlots(node);
+  if (files.length > capacity) {
+    const limit = capacity === MAX_PHOTOS ? `A row can hold only ${MAX_PHOTOS} photos.`
+      : capacity > 0 ? `This row has room for ${capacity} more photo${capacity === 1 ? '' : 's'}.`
+      : 'This row is full.';
+    toast('Too many photos selected. ' + limit);
+    return;
+  }
+  const current = () => !destroyed && request === photoRequest;
+  const eligible = () => current() && !historyComposing && photoPlacement(node) === placement &&
+    files.length <= remainingPhotoSlots(node);
+  photoProcessing = true;
+  try {
+    const prepared = [];
+    for (const file of files) {
+      if (!eligible()) return;
+      prepared.push(await preparePhoto(file));
+    }
+    if (!eligible()) return;
+    await photoService.write(prepared.map(({photo, asset}) => [photo.id, asset]));
+    if (!eligible()) return;
+    commitPhotoChange(node, () => {
+      const row = placement === 'below' ? mk() : node;
+      if (row !== node) insertAfterNodeEnd(node, row);
+      row.photos = [...(row.photos || []), ...prepared.map(item => item.photo)];
+      if (searching()) sKeep.add(row);
+    });
+  } catch (error) {
+    if (current()) toast(error.name === 'QuotaExceededError' ? 'Photo storage is full' : photoAddWarning);
+  } finally { photoProcessing = false; }
+});
+
+let photoSort = null, photoClickBlockedUntil = 0;
+function cancelPhotoSort() {
+  if (!photoSort) return;
+  const {button, line, ghost, timer, active, pointerId} = photoSort;
+  photoSort = null;
+  clearTimeout(timer);
+  button.classList.remove('sorting');
+  line?.remove(); ghost?.remove();
+  if (button.hasPointerCapture(pointerId)) button.releasePointerCapture(pointerId);
+  if (active) photoClickBlockedUntil = performance.now() + 500;
+}
+function beginPhotoSort(event, node, photo, button) {
+  cancelPhotoSort();
+  if (!event.isPrimary || event.button !== 0 || event.ctrlKey || event.shiftKey || event.metaKey) return;
+  photoClickBlockedUntil = 0;
+  const state = photoSort = {node, photo, button, pointerId:event.pointerId, x:event.clientX, y:event.clientY, touch:event.pointerType === 'touch'};
+  const activate = () => {
+    if (photoSort !== state || !button.isConnected || state.active) return;
+    state.active = true;
+    clearTimeout(state.timer);
+    state.group = button.closest('.photo-group');
+    state.line = el('span','photo-insertion-line');
+    state.line.setAttribute('aria-hidden','true');
+    state.group.append(state.line);
+    if (!state.touch && !ipadSafari) {
+      const image = button.querySelector('canvas'), rect = button.getBoundingClientRect();
+      const ghost = state.ghost = document.createElement('canvas');
+      ghost.width = image.width; ghost.height = image.height;
+      ghost.getContext('2d').drawImage(image,0,0);
+      ghost.setAttribute('aria-hidden','true');
+      Object.assign(ghost.style,{position:'fixed',left:'0',top:'0',width:rect.width+'px',height:rect.height+'px',
+        objectFit:'contain',borderRadius:'6px',opacity:'.8',pointerEvents:'none',zIndex:'2147483647'});
+      state.grabX = state.x - rect.left; state.grabY = state.y - rect.top;
+      document.body.append(ghost);
+    }
+    aimPhotoSort(state.x,state.y);
+    button.classList.add('sorting');
+    button.setPointerCapture(event.pointerId);
+  };
+  state.timer = setTimeout(activate, 350);
+  state.activate = activate;
+}
+function aimPhotoSort(x, y) {
+  const state = photoSort;
+  if (!state) return;
+  if (!state.active && Math.hypot(x-state.x,y-state.y) > 6) {
+    if (state.touch) { cancelPhotoSort(); return; }
+    state.activate();
+  }
+  if (!state.active) return;
+  if (state.ghost) state.ghost.style.transform = `translate(${x-state.grabX}px,${y-state.grabY}px)`;
+  const group = state.group, bounds = group.getBoundingClientRect();
+  state.slot = -1;
+  state.line.hidden = true;
+  if (x < bounds.left-4 || x > bounds.right+4 || y < bounds.top-4 || y > bounds.bottom+4) return;
+  const boxes = Array.from(group.querySelectorAll('.photo-tile'),tile=>tile.getBoundingClientRect());
+  // Choose the nearest visual row first, including the whitespace between wrapped rows.
+  const distance = box => Math.abs(y - (box.top + box.height/2));
+  const row = boxes.reduce((best,box)=>distance(box)<distance(best)?box:best);
+  const first = boxes.findIndex(box=>Math.abs(box.top-row.top)<1);
+  let slot = first;
+  while (slot < boxes.length && Math.abs(boxes[slot].top-row.top)<1 && x >= boxes[slot].left+boxes[slot].width/2) slot++;
+  const prev = slot > first ? boxes[slot-1] : null;
+  const next = boxes[slot] && Math.abs(boxes[slot].top-row.top)<1 ? boxes[slot] : null;
+  const lineX = prev && next ? (prev.right+next.left)/2 : prev ? prev.right+2 : next.left-2;
+  state.slot = slot;
+  Object.assign(state.line.style,{left:(lineX-bounds.left)+'px',top:(row.top-bounds.top)+'px',height:row.height+'px'});
+  state.line.hidden = false;
+}
+listen(document, 'pointermove', event => {
+  if (photoSort?.pointerId === event.pointerId) aimPhotoSort(event.clientX,event.clientY);
+});
+listen(document, 'touchmove', event => {
+  if (photoSort?.touch && photoSort.active && event.cancelable) event.preventDefault();
+}, {passive:false,capture:true});
+listen(document, 'touchstart', event => { if(event.touches.length > 1) cancelPhotoSort(); }, {passive:true,capture:true});
+listen(document, 'pointerup', event => {
+  const state = photoSort;
+  if (!state || state.pointerId !== event.pointerId) return;
+  if (state.active) aimPhotoSort(event.clientX,event.clientY);
+  const from = state.node.photos?.indexOf(state.photo) ?? -1;
+  const slot = state.slot ?? -1, index = slot > from ? slot - 1 : slot;
+  cancelPhotoSort();
+  if (index < 0 || from < 0 || index === from || !par.has(state.node)) return;
+  commitPhotoChange(state.node, () => {
+    state.node.photos.splice(from,1);
+    state.node.photos.splice(index,0,state.photo);
+  });
+});
+listen(document,'pointercancel',cancelPhotoSort);
+listen(window,'blur',cancelPhotoSort);
+
+function syncPhotoRow(binding) {
+  const node = binding.getNode(), photos = node.photos;
+  binding.host.classList.toggle('photo-row', !!photos);
+  binding.title.readOnly = !!photos;
+  const key = photos ? node.id + ':' + photos.map(photo => photo.id).join(',') : '';
+  if (binding.photosKey !== key) {
+    binding.photosKey = key;
+    if (binding.photos) { removePhotoPreviews(binding.photos); binding.photos.remove(); binding.photos = null; }
+    if (photos) {
+      const group = binding.photos = el('div', 'photo-group');
+      group.classList.toggle('photo-sortable', photos.length > 1);
+      binding.host.append(group);
+      photos.forEach((photo, index) => {
+        const button = el('button', 'photo-thumb'), canvas = el('canvas'), status = el('span');
+        button.type = 'button';
+        if (photos.length > 1) listen(button, 'pointerdown', event => beginPhotoSort(event, node, photo, button));
+        button.setAttribute('aria-label', `View photo ${index + 1}`);
+        const tile = el('div', 'photo-tile');
+        tile.style.width = `${Math.min(160, 80 * photo.width / photo.height)}px`;
+        status.textContent = 'Unavailable'; status.hidden = canvas.hidden = true;
+        canvas.setAttribute('aria-hidden', 'true');
+        button.append(canvas, status);
+        const remove = el('button', 'photo-delete photo-cross');
+        remove.type = 'button'; remove.setAttribute('aria-label', `Remove photo ${index + 1}`);
+        listen(remove, 'click', event => {
+          event.stopPropagation();
+          if (!par.has(node) || !node.photos?.includes(photo)) return;
+          commitPhotoChange(node, () => {
+            node.photos = node.photos.filter(item => item !== photo);
+            if (!node.photos.length) delete node.photos;
+          });
+        });
+        tile.append(button, remove); group.append(tile);
+        visiblePhotos.set(button, {photo, canvas, status}); photoObserver.observe(button);
+        listen(button, 'click', event => {
+          if (event.detail && performance.now() < photoClickBlockedUntil || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          openPhotoViewer(button, photo, node);
+        });
+      });
+    }
+  }
+  if (binding.photos && binding.host.lastElementChild !== binding.photos) binding.host.append(binding.photos);
+}
+
 load();
 if (saveBlocked) blockedTree = JSON.stringify(JSON.parse(snap()).root);
 render();
@@ -2610,7 +3411,7 @@ if (!persistRequested) {
   try { const request = navigator.storage?.persist?.(); if (request && typeof request.catch === 'function') request.catch(() => {}); } catch (_) {}
 }
 initializePublication();
-return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
+return { on, getSnapshot, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.17.2', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.19.4', apiVersion: 1, capabilities: ['snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

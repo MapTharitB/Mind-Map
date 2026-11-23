@@ -172,8 +172,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.17.2' },
-  mindmap: { src: './mindmap.js', v: '1.15.1' }
+  outliner: { src: './outliner.js', v: '1.19.4' },
+  mindmap: { src: './mindmap.js', v: '1.17.3' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, presentationSupported = true, sharedFocusCollapse = false) {
@@ -195,7 +195,7 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
   for (let i = nodes.length - 1; i >= 0; i--) {
     const node = nodes[i], empty = !(node.titleLineCount>1)&&!node.text.replace(/\u200B/g, '').trim();
     if(node.kind==='spacer'&&!presentationSupported)continue;
-    if (node.kind==='spacer' || !empty || node.children.some(child => surviving.has(child))) {
+    if (node.kind==='spacer' || node.photos?.length || !empty || node.children.some(child => surviving.has(child))) {
       surviving.add(node);if (empty&&node.kind!=='spacer') placeholders.add(node);
     }
   }
@@ -215,7 +215,7 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
     const placeholder = placeholders.has(node);
     const label = node.kind==='spacer'?'\u2063':placeholder ? '(Untitled)' : node.text.replace(/\r\n?|\n/g, ' ');
     if (placeholder) placeholderNodes.push(lines.length);
-    lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);nodeTitleLines.push(node.titleLineCount??1);nodeHasChildren.push(node.kind!=='spacer'&&node.children.some(child=>child.kind!=='spacer'));nodePresentation.push({mapSize:node.mapSize??1,kind:node.kind==='spacer'?'spacer':'node',...(node.childrenInRow?{childrenInRow:true}:{})});
+    lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);nodeTitleLines.push(node.titleLineCount??1);nodeHasChildren.push(node.kind!=='spacer'&&node.children.some(child=>child.kind!=='spacer'));nodePresentation.push({mapSize:node.mapSize??1,kind:node.kind==='spacer'?'spacer':'node',...(node.childrenInRow?{childrenInRow:true}:{}),...(node.photos?{photos:node.photos}:{})});
     if (!syncCollapse || node.open || node === collapseAnchor) {
       for (let i = node.children.length - 1; i >= 0; i--) stack.push({node:node.children[i], depth:depth+1});
     }
@@ -535,6 +535,7 @@ function flushSearch(revealing=false){
 }
 function receiveSearch(value){latestSearchQuery=typeof value?.query==='string'?value.query:'';searchGeneration++;searchDirty=true;flushSearch();}
 function presentationTransport(values){
+  if(values.some(p=>p.photos)&&!supports('photo-attachments-v1','setText'))throw new Error('Mind Map compatibility error: photos require the matching Mind Map module.');
   if(supports('node-presentation-v3','setText'))return values;
   if(values.some(p=>p.childrenInRow))throw new Error('Mind Map compatibility error: Arrange children in one row requires a newer Mind Map module. Reload the matching app files.');
   if(supports('node-presentation-v2','setText'))return values;
@@ -1085,7 +1086,7 @@ async function start() {
     layout();scheduleSync();
   } catch(error) {if(!seedHistory.enabled)seedHistory.dispose();report('Outliner',new Error('Outliner could not load; editing is unavailable or live sync could not start. '+error.message));if(!outline){mode='collapsed';layout();}}
   try {
-    mapModule=await loadModule('mindmap','MindMap');map=mapModule.mount($('map-host'),{...(mapModule.capabilities.includes('canvas-interaction-v1')?{onCanvasInteraction:canvasInteraction}:{}),onError:error=>{dirty=true;if(seedHistory.enabled)seedHistory.markDirty();report('Mind Map',error);}});
+    mapModule=await loadModule('mindmap','MindMap');map=mapModule.mount($('map-host'),{...(mapModule.capabilities.includes('photo-attachments-v1')&&typeof outline.acquirePhoto==='function'?{acquirePhoto:outline.acquirePhoto}:{}),...(mapModule.capabilities.includes('canvas-interaction-v1')?{onCanvasInteraction:canvasInteraction}:{}),onError:error=>{dirty=true;if(seedHistory.enabled)seedHistory.markDirty();report('Mind Map',error);}});
     if(map&&typeof map.destroy==='function'){const instance=map,destroy=map.destroy;map.destroy=()=>{cancelDismissal();mapFocus.cancelFit();projectionGeneration++;if(map===instance)map=null;destroy();};}
     if(!map || !supports('text-input','setText'))throw new Error('Mind Map text-input capability/method is missing');
     const hasSettings=supports('settings-v1','getSettings')&&supports('settings-v1','setSettings'),hasPDF=supports('pdf-export','exportPDF');
