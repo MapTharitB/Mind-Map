@@ -1,4 +1,4 @@
-/* Outliner version 1.19.4 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.19.5 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -330,6 +330,7 @@ async function preparePhoto(file) {
 }
 
 const photoZipLimit = 64 * 1024 * 1024;
+const photoZipMaxDepth = 500;
 const photoCrcTable = Uint32Array.from({length: 256}, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
   return value;
@@ -923,7 +924,7 @@ function listen(target, type, fn, options) {
   const guarded = e => { if (!destroyed) fn(e); };
   target.addEventListener(type, guarded, options);
   const entry = [type, guarded, options];
-  if (target === document || target === window || target === container) globalListeners.push([target, ...entry]);
+  if (target === document || target === window || target === container || target === window.visualViewport) globalListeners.push([target, ...entry]);
   else { if (!listeners.has(target)) listeners.set(target, []); listeners.get(target).push(entry); }
 }
 function setTimeout(fn, delay) {
@@ -962,7 +963,7 @@ function ownsEvent(e, historyShortcut = false) {
 }
 function destroy() {
   if (destroyed) return;
-  cancelPhotoSort(); cleanupViewer(); photoObserver.disconnect(); photoService.close();
+  cancelPhotoSort(); cleanupViewer(); removePhotoPreviews(container); photoObserver.disconnect(); photoService.close();
   depthController?.dispose();endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
@@ -1655,7 +1656,10 @@ function head() {
     numericBindings.forEach(binding => binding.finish());
     menu.classList.remove('show');
   }
-  if (!on) return;
+  if (!on) {
+    if (headBinding?.photos) syncPhotoRow(headBinding);
+    return;
+  }
   setLevel(headEl, 0);
   if (!headBinding) {
     const host = el('div', 'tw'), controls = el('div', 'head-controls');
@@ -2315,6 +2319,7 @@ const toastEl = container.querySelector('#ol-toast');
 const baseToastDuration = 1400;
 const maxWarningDuration = 3500;
 const shortestWarning = 'Copy failed';
+const photoCopyWarning = 'Copied text. Use Export to include photos.';
 const photoAddWarning = 'Could not add photo. Check the format, size, and browser storage.';
 let toastT;
 function warningDuration(message) {
@@ -2355,7 +2360,7 @@ async function outputOutlineText(button, list) {
     if (!text) { toast(a === 'copy' ? 'Nothing to copy' : 'Nothing to export'); return; }
     if (a === 'copy') {
       if (!await copyText(text)) toast(shortestWarning);
-      else if (hasPhotos) toast('Copied text. Use Export to include photos.');
+      else if (hasPhotos) toast(photoCopyWarning);
       else toast('Copied to clipboard', baseToastDuration);
       return;
     }
@@ -2677,7 +2682,7 @@ listen(document, 'keydown', e => {
     const hasPhotos = entries.some(({n}) => n.photos);
     if (k === 'x' && hasPhotos) { toast('Use Export to keep photos before moving this branch.'); return; }
     copyText(text).then(ok => {
-      if (ok && hasPhotos) toast('Copied text. Use Export to include photos.');
+      if (ok && hasPhotos) toast(photoCopyWarning);
       if (destroyed || k !== 'x') return;
       if (!ok) { toast('Copy failed, nothing was cut'); return; }
       const live = it.filter(n => par.has(n));
@@ -3016,6 +3021,7 @@ listen(container, 'dragstart', e => {
 
 async function exportPhotoOutline(entries) {
   const photos = new Map(), nodes = entries.map(({n, d}) => {
+    if (d > photoZipMaxDepth) throw new Error('This outline is too deeply nested for a project ZIP. Export a smaller branch.');
     n.photos?.forEach(photo => photos.set(photo.id, photo));
     return copyPresentation(n, {depth: d, text: n.text, open: n.open});
   });
@@ -3040,7 +3046,7 @@ async function readPhotoOutline(buffer, current) {
   if (version !== 1 || !Array.isArray(nodes) || !nodes.length) invalid();
   const items = [], stack = [], photos = new Map();
   for (const data of nodes) {
-    if (!data || !Number.isInteger(data.depth) || data.depth < 0 || data.depth > stack.length || data.depth > 500 ||
+    if (!data || !Number.isInteger(data.depth) || data.depth < 0 || data.depth > stack.length || data.depth > photoZipMaxDepth ||
         typeof data.text !== 'string' || typeof data.open !== 'boolean') invalid();
     const item = {...data, children: []};
     if (!validPresentation(item)) invalid();
@@ -3361,8 +3367,11 @@ function syncPhotoRow(binding) {
   const node = binding.getNode(), photos = node.photos;
   binding.host.classList.toggle('photo-row', !!photos);
   binding.title.readOnly = !!photos;
-  const key = photos ? node.id + ':' + photos.map(photo => photo.id).join(',') : '';
-  if (binding.photosKey !== key) {
+  const photosNode = photos ? node : null;
+  const key = photos ? photos.map(photo => photo.id).join(',') : '';
+  // Undo and Redo restore new node objects even when photo IDs and order match.
+  if (binding.photosNode !== photosNode || binding.photosKey !== key) {
+    binding.photosNode = photosNode;
     binding.photosKey = key;
     if (binding.photos) { removePhotoPreviews(binding.photos); binding.photos.remove(); binding.photos = null; }
     if (photos) {
@@ -3413,5 +3422,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.19.4', apiVersion: 1, capabilities: ['snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.19.5', apiVersion: 1, capabilities: ['snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
