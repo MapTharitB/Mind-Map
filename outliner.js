@@ -1,4 +1,4 @@
-/* Outliner version 1.16.4 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.17.2 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -245,6 +245,7 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .ic:hover{color:var(--ink)!important;border-color:var(--line)!important}
 /* REQUIREMENT (zoom title): the zoomed-in bullet is shown as a big editable heading above its children, aligned with the bullets.
    Its font size and weight are size level 0 (49px bold, see levelStyle()) in the two hierarchy modes, plain 16px in Plain Text mode; set by head(). Its line height is the shared textarea rule. */
+/* Owner override: the Focus title uses the top-level hierarchy size. */
 .moa-outliner .head{flex:none;display:none;padding-block:7.5px 6.5px;padding-right:var(--text-right)}
 /* Owner override 2026-10-16 (R12-3A): balance the complete title in the first-row slot.
    The focused sheet border adds 1px below: 7.5px above = 6.5px + 1px below.
@@ -252,12 +253,12 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .head.show{display:block}
 .moa-outliner .head.show,.moa-outliner .head.show + .sheet{padding-left:calc(var(--gut) + var(--gutter-padding) - var(--bullet-width) + var(--focus-gutter-inset,0px))}
 .moa-outliner .head.show + .sheet{padding-top:0}
+/* Hidden chevrons keep their flex slot so More stays in the left column. */
 .moa-outliner .head-controls{position:absolute;right:100%;top:1px;height:var(--bh);display:flex;gap:var(--focus-control-gap)}
 /* The header ends at the title edge; the direct children start one sheet border farther right. */
 .moa-outliner .head.show + .sheet > .node > .row > .arrow{left:auto;right:calc(100% + var(--sheet-border))}
 .moa-outliner .head.show + .sheet > .node > .row > .dots{left:auto;right:calc(100% + var(--sheet-border) + var(--arrow-width) + var(--focus-control-gap))}
 .moa-outliner .head.show .head-controls>button{position:static;height:100%;opacity:1}
-.moa-outliner .head-controls>.arrow.hide{display:none}
 .moa-outliner .head textarea{display:block;width:100%;flex:none;font-size:var(--fs);font-weight:var(--fw);padding:4px 4px;min-height:calc(var(--lh) + 8px);color:var(--ink)}
 .moa-outliner .head textarea::placeholder{color:var(--mute)}
 .moa-outliner .sheet.sb{scrollbar-color:var(--mute) transparent}
@@ -279,10 +280,16 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .row.dragging{opacity:.4}
 .moa-outliner .dropline{position:fixed;display:none;height:2px;background:var(--accent);pointer-events:none;z-index:15}
 .moa-outliner .row.drop-in{background:var(--halo);box-shadow:inset 0 0 0 1px var(--accent)}
-.moa-outliner .dots{position:absolute;left:-47px;top:0;width:21px;height:var(--bh);display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:16px;opacity:0}
-.moa-outliner .dots>span{flex:none;width:30px;aspect-ratio:1;display:grid;place-items:center;border-radius:50%;pointer-events:none}
+.moa-outliner .dots{position:absolute;left:-47px;top:0;width:21px;height:var(--bh);display:flex;align-items:center;justify-content:center;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;opacity:0}
+.moa-outliner .dots>span{flex:none;width:24px;aspect-ratio:1;display:grid;place-items:center;border-radius:50%;pointer-events:none}
+.moa-outliner .dots>span::before{
+  --dot-spacing:4.75px;
+  content:"";width:3px;aspect-ratio:1;border-radius:50%;background:currentColor;
+  box-shadow:calc(-1 * var(--dot-spacing)) 0, var(--dot-spacing) 0;
+}
+@media(forced-colors:active){.moa-outliner .dots>span::before{forced-color-adjust:none;color:ButtonText}}
 .moa-outliner .dots:focus-visible{outline:none}
-.moa-outliner .dots:focus-visible>span{outline:1px solid var(--accent)}
+.moa-outliner .dots:focus-visible>span{outline:1px solid var(--accent);outline-offset:3px}
 .moa-outliner .row:hover .dots,.moa-outliner .dots:focus-visible{opacity:1}
 /* Pointer feedback shares the shell palette; menu state does not change these hit boxes. */
 @media(hover:hover){.moa-outliner #ol-moreBtn:enabled:hover{background:var(--halo);color:var(--ink);border-color:var(--line)}.moa-outliner .dots:enabled:hover{color:var(--ink)}.moa-outliner .dots:enabled:hover>span{background:var(--halo)}}
@@ -294,9 +301,6 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .menu [hidden]{display:none}
 .moa-outliner .menu button:hover{background:var(--btn)}
 .moa-outliner .menu .sep{border-top:1px solid var(--line);margin:4px 0}
-/* The three text style buttons at the top of the menu: a check mark (reserved width, so the labels stay aligned) shows the current one. */
-.moa-outliner .menu button[data-m]::before{content:"";display:inline-block;width:1.3em}
-.moa-outliner .menu button[data-m].on::before{content:"✓"}
 .moa-outliner .menu .child-row-toggle:not([hidden]){display:flex;align-items:center}
 .moa-outliner .menu .child-row-toggle::before{content:"";flex:0 0 1em}
 .moa-outliner .menu .child-row-toggle[aria-pressed="true"]::before{content:"✓" / ""}
@@ -461,6 +465,12 @@ const descriptionCSS = String.raw`
 .moa-outliner .head .description-field textarea{padding-top:0;min-height:calc(var(--lh) + 4px);font-size:var(--fs);font-weight:var(--fw);color:var(--description-ink)}
 `;
 const paneExpand = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 11 11\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M10 4V1H7\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M1 7V10H4\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>", paneMinimize = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 11 11\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M7 1V4H10\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><path d=\"M4 10V7H1\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>", paneToggle = "<svg width=\"18\" height=\"14\" viewBox=\"0 0 18 14\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n    <defs>\n      <filter id=\"ol-tog-glow\" x=\"-80%\" y=\"-20%\" width=\"260%\" height=\"140%\">\n        <feGaussianBlur in=\"SourceGraphic\" stdDeviation=\"1.4\" result=\"blur\"/>\n        <feMerge><feMergeNode in=\"blur\"/><feMergeNode in=\"SourceGraphic\"/></feMerge>\n      </filter>\n    </defs>\n    <rect x=\"0.75\" y=\"0.75\" width=\"16.5\" height=\"12.5\" rx=\"2.25\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n    <line x1=\"6.5\" y1=\"0.75\" x2=\"6.5\" y2=\"13.25\" stroke=\"currentColor\" stroke-width=\"1.5\"/>\n  </svg>";
+const menuSeparator = '<div class="sep" role="separator"></div>';
+function textMenuActions(scopes) {
+  const group = (action, verb, suffix) => scopes.map(([scope, label]) =>
+    `<button data-a="${action}" data-scope="${scope}">${verb}${label}${suffix}</button>`).join('');
+  return group('copy', 'Copy', '') + menuSeparator + group('download', 'Export', ' as .txt');
+}
 const template = String.raw`<div class="page">
   <!-- Toolbar. DOM order (breadcrumb, tools, search, menu button) is the wide layout; CSS "order" rearranges it on narrow screens.
        Keep the four icon buttons (indent, outdent, undo, redo) inside .tools. See the responsive CSS block for the exact layouts. -->
@@ -492,8 +502,15 @@ const template = String.raw`<div class="page">
 <!-- Owner-approved 2026-10-26: focused-branch Expand to level follows Collapse All; target/live stay private to this menu. -->
 <!-- Latest owner override: Expand to Level applies intentional valid adjustments immediately; no Apply or optional live mode. -->
 <!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
-<div class="menu" id="ol-topMenu"><button data-a="mode" data-m="plain" class="on">Plain Text</button><button data-a="mode" data-m="static">Static Hierarchy</button><button data-a="mode" data-m="dynamic">Dynamic Hierarchy</button><div class="sep" role="separator"></div><button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div><div class="sep" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="exportFocus">Export Focus</button><button data-a="exportAll">Export All</button><div class="sep" role="separator"></div><button data-a="clearAll">Clear All</button></div>
-<div class="menu" id="ol-menu"><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange children in one row</button><div class="sep" role="separator"></div><button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button><div class="sep" role="separator"></div><button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div><button data-a="exportVis">Export Visible</button><button data-a="export">Export</button><div class="sep" data-group="export" role="separator"></div><button data-a="delete">Delete</button></div>
+<!-- Owner override: hierarchy styling is automatic and Expand All is the first top menu action. -->
+<!-- Owner override: file import opens first. Copy keeps the clipboard behavior and Export as .txt downloads the same outline text. -->
+<div class="menu" id="ol-topMenu"><button data-a="importFile">Import .txt to Home</button>${menuSeparator}
+<button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div>${menuSeparator}
+${textMenuActions([['visible', ' Visible'], ['focus', ' Focus'], ['all', ' All']])}${menuSeparator}<button data-a="clearAll">Clear All</button></div>
+<div class="menu" id="ol-menu"><button data-a="importFile" hidden>Import .txt Here</button><div class="sep" data-group="import" role="separator" hidden></div>
+<button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange children in one row</button>${menuSeparator}<button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button>${menuSeparator}<button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div>
+${textMenuActions([['visible', ' Visible'], ['node', '']])}${menuSeparator}<button data-a="delete">Delete</button></div>
+<input id="ol-import-file" type="file" accept=".txt,text/plain" hidden>
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
@@ -507,17 +524,18 @@ function encodeNodeText(node, depth, version = 1) {
   }
   return out.join('\n');
 }
-function decodeDescriptionOutline(text) {
+function decodeDescriptionOutline(text, allowPlainOutline = false) {
   // Accept one conventional terminal line ending; no extra trailing content.
   if(/\[\/moa\](?:\r?\n)$/.test(text))text=text.replace(/\r?\n$/, '');
   const quotedHeader=/^ *\[moa v=[34]\](\r?\n|$)/.exec(text);
+  if (allowPlainOutline && !/^ *\[moa v=/.test(text)) text = text.replace(/\r?\n$/, '');
   // In LF v3/v4 documents a description's literal CR remains payload. A CRLF
   // envelope declares conventional CRLF transport; remove only that added CR.
   const raw = (quotedHeader&&quotedHeader[1]!=='\r\n'?text:text.replace(/\r\n/g, '\n')).split('\n');
   // Only the first physical line can declare an extended document.
   const reject = { recognized: false, attempted: /^\s*\[\/?moa(?:\s|\])/.test(raw[0] || '') };
   if (!raw.length || !quotedHeader&&raw.some(line => /\r/.test(line))) return reject;
-  const common = Math.min(...raw.filter(line => line.length).map(line => line.match(/^ */)[0].length));
+  const common = raw.reduce((min, line) => line.length ? Math.min(min, line.match(/^ */)[0].length) : min, Infinity);
   if (!Number.isFinite(common) || common % 2) return reject;
   let lines = raw.map(line => line.slice(common)), extended=false,codecVersion=1;
   const attempted=reject.attempted;
@@ -564,7 +582,7 @@ function decodeDescriptionOutline(text) {
     owner.text += '\n' + body.join('\n'); mayDescribe = false; recognized = true;
   }
   if(extended){const pending=items.slice();if(!pending.length)return{...reject,attempted:true};while(pending.length){const n=pending.pop();if(!validPresentation(n))return{...reject,attempted:true};pending.push(...n.children);}}
-  return recognized ? { recognized: true, items, extended } : reject;
+  return recognized || (allowPlainOutline && items.length) ? { recognized: true, items, extended } : reject;
 }
 
 // A single canonical string; the optional count selects the title/description boundary.
@@ -673,6 +691,7 @@ function destroy() {
   depthController?.dispose();endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
   timers.forEach(id => window.clearTimeout(id)); timers.clear();
+  textDownloadUrls.forEach(url => URL.revokeObjectURL(url)); textDownloadUrls.clear();
   frames.forEach(id => window.cancelAnimationFrame(id)); frames.clear();
   if (resizeObserver) resizeObserver.disconnect();
   globalListeners.forEach(([target, type, fn, options]) => target.removeEventListener(type, fn, options));
@@ -824,13 +843,8 @@ function schedulePublication() {
 // 5. Toolbar: indent / outdent / undo / redo icon buttons, search, ... menu; responsive layouts live in the CSS.
 // 6. The scrollbar auto-hides (CSS .sheet). Bullet heights are re-measured when the width changes (no leftover gaps after widening).
 // 7. Keyboard shortcuts must work on any keyboard layout (for example Thai), see the global keydown handler.
-// 8. Text style (owner specified, top menu, three choices; a view setting only: not saved, not part of undo). Size levels: 0 = 49px bold, 1 = 28px bold (1.75x per level),
-//    2 = 16px bold, 3 = 16px normal. A row at depth d has level base + d. See measureBase() and levelStyle().
-//    Plain Text (default): every row and the zoom title is level 3, no hierarchy.
-//    Static Hierarchy: depth 0, 1, 2 always get levels 0, 1, 2 (49px, 28px, 16px bold), deeper rows are normal. Zoomed: the title is level 0 and plays the role of
-//    Home's depth 0, so depth 0, 1 get levels 1, 2 (28px bold, 16px bold) and deeper rows are normal.
-//    Dynamic Hierarchy: the deepest shown row is always level 3 (normal), the row level above it is bold 16px, and so on up, never above the static levels. A view with
-//    only one level is all normal 16px and the sizes grow as the user adds depth (side effect: text jumps when the visible depth changes).
+// 8. Text style: 28px bold for Home topics and the Focus title, 16px bold for direct children, and 16px regular deeper down.
+//    The Focus title takes the place of a top-level topic in the hierarchy.
 // ===== EXPLICITLY REJECTED, DO NOT "IMPROVE" =====
 // - Do NOT stop buttons, menus or triangles from taking focus (no mousedown preventDefault on them) and do NOT restore the caret after a redraw.
 //   Clicking a control leaves focus wherever the browser puts it. (Only the toolbar buttons with class kb keep the caret; that is original behaviour.)
@@ -1093,24 +1107,13 @@ const el = (t, c) => { const e = document.createElement(t); if (c) e.className =
 const setEditorHeight = (t,height) => { t.style.height=height; if(t.dataset.role==='title')t.parentElement.style.setProperty('--map-size-title-height',height); };
 const fit = t => { t.style.height = 'auto'; setEditorHeight(t,t.scrollHeight + 'px'); t.scrollTop = 0; };
 
-// Size level of the first row (depth 0) of the current view (level 0 is the biggest), chosen by the text style (mode, see requirement 8).
-// top = the smallest level depth 0 may use: 0 at Home, 1 when zoomed because the title already is level 0.
-// Recomputed on every render, so expanding, collapsing, searching and zooming are all followed. Nothing is stored on the bullet.
-const PLAIN = 3; // the size level of plain text: 16px, normal weight
-let base = 0, mode = 'plain';
-function measureBase() {
-  const top = zoom === root ? 0 : 1;
-  if (mode === 'plain') base = PLAIN;
-  else if (mode === 'static') base = top;
-  else base = Math.max(top, PLAIN - vis().reduce((m, n) => Math.max(m, depthOf(n)), 0));
-}
-// Text metrics for a size level: every level above PLAIN (0, 1, 2) is bold; the size grows 1.75x per level for levels 0 and 1 (1.75 x 1.75 x 16px, 1.75 x 16px), then the 16px default.
+const REGULAR_LEVEL = 2;
 // Line height keeps the default 22/16 ratio; the row height adds the 6px of vertical padding so the dots stay centred on the first line.
-function levelStyle(lvl) {
-  const fs = 16 * Math.pow(1.75, Math.max(0, PLAIN - 1 - lvl)), lh = Math.round(fs * 22 / 16);
-  return { '--fs': fs + 'px', '--lh': lh + 'px', '--bh': (lh + 6) + 'px', '--fw': lvl < PLAIN ? 600 : 400 };
+function levelStyle(level) {
+  const fs = level === 0 ? 28 : 16, lh = Math.round(fs * 22 / 16);
+  return { '--fs': fs + 'px', '--lh': lh + 'px', '--bh': (lh + 6) + 'px', '--fw': level < REGULAR_LEVEL ? 600 : 400 };
 }
-const setLevel = (e, lvl) => Object.entries(levelStyle(lvl)).forEach(([k, v]) => e.style.setProperty(k, v));
+const setLevel = (e, level) => Object.entries(levelStyle(level)).forEach(([k, v]) => e.style.setProperty(k, v));
 
 // Shared row/head editor binding. Canonical offsets never depend on the active field.
 function readEditorRange(n, textarea) {
@@ -1136,7 +1139,7 @@ function refreshNodeEditor(binding) {
   host.classList.toggle('spacer-editor',n.kind==='spacer');title.placeholder=n.kind==='spacer'?'Spacer':head?'Untitled':'';
   updateBadge(host,n);
   if (parts.hasDescription && !binding.description) {
-    const field = el('div', 'description-field'), t = el('textarea'); setLevel(field, PLAIN);
+    const field = el('div', 'description-field'), t = el('textarea'); setLevel(field, REGULAR_LEVEL);
     t.rows = 1; t.spellcheck = false; t.dataset.role = 'description'; t.dataset.id = n.id;
     t.setAttribute('aria-label', head ? 'Current topic description' : 'Node description');
     field.appendChild(t); host.appendChild(field); binding.description = t; binding.descriptionHost = field;
@@ -1348,7 +1351,6 @@ function render(focusId, pos) {
   if (searching()) computeSets();
   const children = shownKids(zoom);
   if (zoom !== root && !isOpen(zoom) && realChildren(zoom).length) { sel.clear(); anchor = cursor = null; }
-  measureBase();
   children.forEach(c => tree.appendChild(row(c, false, 0)));
   if (searching() && !sShown.size) { const m = el('div', 'nomatch'); m.textContent = 'No matches'; tree.appendChild(m); }
   tree.querySelectorAll('textarea').forEach(fit);
@@ -1367,7 +1369,7 @@ function head() {
     menu.classList.remove('show');
   }
   if (!on) return;
-  setLevel(headEl, mode === 'plain' ? PLAIN : 0);
+  setLevel(headEl, 0);
   if (!headBinding) {
     const host = el('div', 'tw'), controls = el('div', 'head-controls');
     headControls = createNodeControls(() => zoom, true);
@@ -1442,11 +1444,24 @@ function updateChevron(arrow, node) {
   if (hasChildren) arrow.setAttribute('aria-expanded', String(open));
   else arrow.removeAttribute('aria-expanded');
 }
+// Safari can reset the sheet's scroll offset while render rebuilds its rows.
+function renderBranchToggle(node) {
+  if (!ipadSafari || !treeEl.scrollTop) { render(); return; }
+  const previousScroll = treeEl.scrollTop;
+  const previousTop = els.get(node)?.getBoundingClientRect().top;
+  render();
+  const currentTop = els.get(node)?.getBoundingClientRect().top;
+  if (previousTop === undefined || currentTop === undefined) {
+    treeEl.scrollTop = previousScroll;
+  } else if (currentTop !== previousTop) {
+    treeEl.scrollTop += currentTop - previousTop;
+  }
+}
 function createNodeControls(getNode, focused = false) {
   const arrow = el('button', 'arrow'), more = el('button', 'dots');
   const chevron = el('span'), dots = el('span');
   chevron.textContent = '▸'; chevron.setAttribute('aria-hidden', 'true');
-  dots.textContent = '⋯'; dots.setAttribute('aria-hidden', 'true');
+  dots.setAttribute('aria-hidden', 'true');
   arrow.appendChild(chevron); more.appendChild(dots);
   arrow.type = more.type = 'button';
   if (!focused) arrow.tabIndex = more.tabIndex = -1;
@@ -1461,7 +1476,7 @@ function createNodeControls(getNode, focused = false) {
     if (!realChildren(node).length) return;
     const open = !isOpen(node);
     if (e.ctrlKey || e.metaKey) setOpen(node, open); else setNodeOpen(node, open);
-    render();
+    renderBranchToggle(node);
   };
   // The ... button on each bullet opens the bullet menu. DO NOT add mousedown preventDefault to it or to the triangle (rejected, see summary at the top).
   more.onclick = e => { e.stopPropagation(); openMenu(getNode(), more); };
@@ -1472,7 +1487,7 @@ function createNodeControls(getNode, focused = false) {
 function row(n, inSel, d) {
   const wrap = el('div', 'node'); wrap.dataset.id = n.id;
   const r = el('div', 'row'); const selOn = inSel || sel.has(n); if (selOn) r.classList.add('sel'); els.set(n, r);
-  setLevel(r, base + d);
+  setLevel(r, d + (zoom === root ? 0 : 1));
   const {more, arrow} = createNodeControls(() => n);
   const bu = el('a', 'bullet' + (n.children.length && !isOpen(n) ? ' closed' : '')); bu.innerHTML = '<i></i>'; bu.title = 'Zoom in';
   // Owner V1.1 exception: bullet navigation opens the view without starting text entry.
@@ -1750,6 +1765,9 @@ function setPinnedFocus(nodeId) {
 }
 function syncMenuActions(){
   const n=menuNode;
+  const importHidden = !canImportInto(n);
+  menu.querySelector('[data-a="importFile"]').hidden = importHidden;
+  menu.querySelector('[data-group="import"]').hidden = importHidden;
   const placeholder = !subscribers.get('pinFocus').size || n === phNode && phOwner && phOwner.children.length === 1 && !n.text && !n.children.length;
   menu.querySelector('[data-a="pinFocus"]').hidden = placeholder;
   menu.querySelector('[data-group="pin"]').hidden = placeholder; setPinnedFocus(pinnedFocusId);
@@ -1757,9 +1775,8 @@ function syncMenuActions(){
   // not the currently expanded/search-filtered rows. Selected roots share one menu policy.
   const hasChildren = menuT.some(n => realChildren(n).length), hasGrandchildren = menuT.some(n => realChildren(n).some(c => realChildren(c).length));
   menu.querySelectorAll('[data-a="expand"],[data-a="collapse"]').forEach(b => { b.hidden = !hasGrandchildren; });
-  menu.querySelector('[data-a="exportVis"]').hidden = !hasChildren;
+  menu.querySelectorAll('[data-scope="visible"]').forEach(button => { button.hidden = !hasChildren; });
   menu.querySelector('[data-group="branches"]').hidden = !hasGrandchildren;
-  menu.querySelector('[data-group="export"]').hidden = !hasChildren;
 }
 function openMenu(n, b) {
   numericBindings.forEach(b=>b.finish());commitSize();menuNode = n;sizeDirty=false;sizeInclude=false;sizeScope.checked=false;syncPresentationMenu(); menuT = n !== zoom && sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
@@ -1768,7 +1785,7 @@ function openMenu(n, b) {
 }
 const setOpen = (n, o) => { const children = realChildren(n); if (children.length) setNodeOpen(n, o); children.forEach(c => setOpen(c, o)); };
 menu.onclick = e => {
-  const a = e.target.dataset.a; if (!a) return;numericBindings.forEach(b=>b.finish());if(a==='spacer'||a==='removeSpacer'){presentationCommand(a);return;} menu.classList.remove('show');
+  const a = e.target.dataset.a; if (!a || e.target.hidden) return;numericBindings.forEach(b=>b.finish());if(a==='spacer'||a==='removeSpacer'){presentationCommand(a);return;} menu.classList.remove('show');
   if(a==='description'){
     const binding=editorForNode(menuNode);
     if(binding&&!e.target.hidden&&!binding.description&&!historyComposing){
@@ -1778,7 +1795,10 @@ menu.onclick = e => {
     return;
   }
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
-  else if (a === 'delete') delItems(menuT); else if (a === 'export') exportText(menuT, false); else if (a === 'exportVis') exportText(menuT, true); else { depthController?.invalidate(); menuT.forEach(n => setOpen(n, a === 'expand')); render(); }
+  else if (a === 'delete') delItems(menuT);
+  else if (a === 'importFile') chooseOutlineFile(menuNode);
+  else if (a === 'copy' || a === 'download') outputOutlineText(e.target, menuT);
+  else if (a === 'expand' || a === 'collapse') { depthController?.invalidate(); menuT.forEach(n => setOpen(n, a === 'expand')); renderBranchToggle(menuNode); }
 };
 listen(document, 'click', e => { if (menu.classList.contains('show') && !menu.contains(e.target)) menu.classList.remove('show'); if (topMenu.classList.contains('show') && !topMenu.contains(e.target)) {depthController?.close();topMenu.classList.remove('show');} });
 
@@ -1840,16 +1860,33 @@ function parseHtml(h) {
   });
   return [...d.querySelectorAll('ul,ol')].filter(u => !u.parentElement.closest('ul,ol')).flatMap(walk);
 }
+function placeItems(items, target, replaceEmpty) {
+  const parent = target ? par.get(target) : root;
+  const index = target ? parent.children.indexOf(target) + 1 : parent.children.length;
+  const peers = replaceEmpty ? items.slice(1) : items;
+  if (target) openPlaceholderOwner(target);
+  if (replaceEmpty) {
+    const first = items[0];
+    copyPresentation(first, target);
+    target.text = first.text;
+    target.children = first.children;
+    if (target === phNode) promotePresentation(target);
+  }
+  if (peers.length) {
+    const before = parent.children.slice(0, index);
+    parent.children = before.concat(peers, parent.children.slice(index));
+  }
+  return peers.at(-1) ?? target;
+}
 function insertItems(items, target, replaceEmpty) {
-  const p = par.get(target); let last;
-  openPlaceholderOwner(target);
-  if (replaceEmpty && !target.text.trim() && !target.children.length) {
-    copyPresentation(items[0],target);target.text = items[0].text; target.children = items[0].children;if(target===phNode)promotePresentation(target);
-    p.children.splice(p.children.indexOf(target) + 1, 0, ...items.slice(1));
-    last = items.length > 1 ? items[items.length - 1] : target;
-  } else { p.children.splice(p.children.indexOf(target) + 1, 0, ...items); last = items[items.length - 1]; }
+  const last = placeItems(items, target, replaceEmpty && !target.text.trim() && !target.children.length);
   if (searching()) { sKeep.add(target); items.forEach(i => sKeep.add(i)); }
   sel.clear(); render(last.id);
+}
+function instantiateOutlineItem(item) {
+  const node = copyPresentation(item, mk(item.text));
+  node.children = item.children.map(instantiateOutlineItem);
+  return node;
 }
 listen(document, 'paste', e => {
   if (!ownsEvent(e)) return;
@@ -1860,8 +1897,7 @@ listen(document, 'paste', e => {
   const legacyDocument=/^ *\[moa v=[12]\](?:\r?\n|$)/.test(text);
   if(decoded.attempted&&!decoded.recognized&&!legacyDocument){e.preventDefault();toast('Invalid or unsupported outline interchange document');return;}
   if(e.target?.closest('#ol-head')){if(decoded.extended&&!legacyDocument){e.preventDefault();toast('Paste an outline document into an outline row');}return;}
-  const instantiate = item => { const n = copyPresentation(item,mk(item.text)); n.children = item.children.map(instantiate); return n; };
-  let items = decoded.recognized ? decoded.items.map(instantiate) : !decoded.attempted&&/<li[\s>]/i.test(html) ? parseHtml(html) : [];
+  let items = decoded.recognized ? decoded.items.map(instantiateOutlineItem) : !decoded.attempted&&/<li[\s>]/i.test(html) ? parseHtml(html) : [];
   if (!items.length) items = parseOutline(text);
   if (!items.length) return;
   // The event target is the focused bullet even inside sandboxed frames where document.activeElement can be stale.
@@ -1875,11 +1911,68 @@ listen(document, 'paste', e => {
   insertItems(items, target, !!a);
 }, true);
 
+const outlineFileInput = container.querySelector('#ol-import-file');
+let pendingFileTarget, fileRequest = 0;
+function canImportInto(node) {
+  return !!node && par.has(node) && node.kind !== 'spacer' && !node.text.includes('\n') &&
+    !node.text.trim() && !realChildren(node).length;
+}
+function chooseOutlineFile(target) {
+  if (historyComposing || (target && !canImportInto(target))) return;
+  fileRequest++;
+  pendingFileTarget = target;
+  outlineFileInput.value = '';
+  try { outlineFileInput.click(); }
+  catch (_) { pendingFileTarget = undefined; toast('Could not open the file picker'); }
+}
+listen(outlineFileInput, 'cancel', () => { pendingFileTarget = undefined; });
+listen(outlineFileInput, 'change', async () => {
+  const file = outlineFileInput.files[0], target = pendingFileTarget, request = fileRequest;
+  pendingFileTarget = undefined;
+  outlineFileInput.value = '';
+  if (!file || target === undefined) return;
+  if (!/\.txt$/i.test(file.name)) { toast('Choose a .txt file'); return; }
+  const currentRequest = () => !destroyed && request === fileRequest;
+  let items;
+  try {
+    const bytes = await file.arrayBuffer();
+    if (!currentRequest()) return;
+    const source = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    const decoded = decodeDescriptionOutline(source, true);
+    if (decoded.attempted && !decoded.recognized) { toast('Invalid or unsupported outline interchange document'); return; }
+    items = decoded.recognized ? decoded.items.map(instantiateOutlineItem) : parseOutline(source);
+  } catch (_) {
+    if (currentRequest()) toast('Could not read the file as UTF-8 text');
+    return;
+  }
+  if (!items.length) { toast('This text file is empty'); return; }
+  if (historyComposing) { toast('Finish typing and try importing again'); return; }
+  if (target && !canImportInto(target)) { toast('The import target is no longer empty or available'); return; }
+  record();
+  const destination = target ?? root;
+  // A transient typing row is only a placeholder until its owner gains real content.
+  if (phOwner === destination && !realChildren(destination).length) {
+    destination.children.length = 0;
+    phNode = phOwner = null;
+  }
+  placeItems(items, target, !!target);
+  if (target && searching()) {
+    sKeep.add(target);
+    items.slice(1).forEach(node => sKeep.add(node));
+  }
+  depthController?.invalidate();
+  render();
+  toast(target ? 'Imported here' : 'Imported to Home');
+});
+
 // REQUIREMENT: export text is always 2-space indent and a "- " prefix. Not configurable. visible=true skips children of collapsed bullets.
 // REQUIREMENT (top menu Export All / Export Visible, list = null): exports only the current zoom, but when zoomed into a bullet that bullet itself is the
 // depth 0 line and its children are indented under it (Node D, then E F G under it). At Home there is no header line, only the top-level bullets.
 // Plain text export: 2-space indent, "- " prefix. With visible = true, children of collapsed bullets are left out.
 function toText(list, visible) {
+  return serializeOutline(list, visible).text;
+}
+function serializeOutline(list, visible) {
   const entries=[];
   (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;entries.push({n,d});w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
   let extended=false,codecVersion=1;
@@ -1893,7 +1986,8 @@ function toText(list, visible) {
       encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+(n.childrenInRow?' children=row':'')+']');
     }
     return encoded.join('\n');});
-  return extended?'[moa v='+codecVersion+']\n'+out.join('\n')+'\n[/moa]':out.join('\n');
+  const body = out.join('\n');
+  return {text: extended ? '[moa v='+codecVersion+']\n'+body+'\n[/moa]' : body, first: entries[0]?.n};
 }
 const toastEl = container.querySelector('#ol-toast'); let toastT;
 function toast(m) { if (destroyed) return; toastEl.textContent = m; toastEl.classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => toastEl.classList.remove('show'), 1400); }
@@ -1906,12 +2000,42 @@ async function copyText(s) {
   try { ok = document.execCommand('copy'); } catch (e) {} t.remove(); return ok;
 }
 // Export = copy immediately and show a toast. DO NOT bring back a popup or modal.
-async function exportText(list, visible) { const s = toText(list, visible); toast(!s ? 'Nothing to export' : (await copyText(s)) ? 'Copied to clipboard' : 'Copy failed'); }
+const textDownloadUrls = new Set();
+function outlineFileName(first) {
+  const title = splitNodeText(first.text, first.titleLineCount).title;
+  const clean = title.replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+  const name = [...clean].slice(0, 80).join('').replace(/[. ]+$/, '') || 'Outline';
+  const reserved = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(name);
+  return (reserved ? '_' : '') + name + '.txt';
+}
+async function outputOutlineText(button, list) {
+  const {a, scope} = button.dataset;
+  try {
+    const {text, first} = serializeOutline(scope === 'all' ? root.children : list, scope === 'visible');
+    if (!text) { toast(a === 'copy' ? 'Nothing to copy' : 'Nothing to export'); return; }
+    if (a === 'copy') { toast(await copyText(text) ? 'Copied to clipboard' : 'Copy failed'); return; }
+
+    const link = document.createElement('a');
+    link.hidden = true;
+    link.download = outlineFileName(first);
+    const url = URL.createObjectURL(new Blob([text], {type: 'text/plain;charset=utf-8'}));
+    textDownloadUrls.add(url);
+    try {
+      link.href = url;
+      container.appendChild(link);
+      link.click();
+      toast('Download started');
+    } finally {
+      link.remove();
+      setTimeout(() => { URL.revokeObjectURL(url); textDownloadUrls.delete(url); }, 1500);
+    }
+  } catch (_) { toast(a === 'copy' ? 'Copy failed' : 'Could not export the text file'); }
+}
 // Escape closes whichever menu is open (top menu or bullet menu).
 listen(document, 'keydown', e => { if (!ownsEvent(e)) return; if (e.key === 'Escape') { topMenu.classList.remove('show'); menu.classList.remove('show'); } });
 function setAll(open) {
   depthController?.invalidate();
-  if (open && zoom !== root) setOpen(zoom, true);
+  if (zoom !== root) setOpen(zoom, open);
   else realChildren(zoom).forEach(node => setOpen(node, open));
   render();
 }
@@ -2125,16 +2249,18 @@ depthController=createDepthController();
 moreBtn.onclick = e => {
   e.stopPropagation(); menu.classList.remove('show');
   if (topMenu.classList.contains('show')) {depthController.close();topMenu.classList.remove('show');}
-  else {depthController.refresh();positionMenu(topMenu, moreBtn.getBoundingClientRect(), true);}
+  else {
+    topMenu.querySelectorAll('[data-scope="focus"]').forEach(button => { button.hidden = zoom === root; });
+    depthController.refresh();positionMenu(topMenu, moreBtn.getBoundingClientRect(), true);
+  }
 };
 topMenu.onclick = e => {
-  const a = e.target.dataset.a; if (!a) return; topMenu.classList.remove('show');
-  if (a === 'mode') { mode = e.target.dataset.m; topMenu.querySelectorAll('[data-m]').forEach(b => b.classList.toggle('on', b === e.target)); render(); }
-  else if (a === 'clearAll') clearAll();
+  const a = e.target.dataset.a; if (!a || e.target.hidden) return; topMenu.classList.remove('show');
+  if (a === 'clearAll') clearAll();
   else if (a === 'expandAll') setAll(true); else if (a === 'collapseAll') setAll(false);
   // Current owner override: Export Focus retains historical zoom scope; Export All uses Home.
-  else if (a === 'exportAll') exportText(root.children, false);
-  else if (a === 'exportFocus' || a === 'exportVis') exportText(null, a === 'exportVis');
+  else if (a === 'copy' || a === 'download') outputOutlineText(e.target, null);
+  else if (a === 'importFile') chooseOutlineFile(null);
 };
 
 // Clear the complete Home tree, with one history entry even after recent typing.
@@ -2486,5 +2612,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.16.4', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.17.2', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
