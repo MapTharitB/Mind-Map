@@ -2,7 +2,7 @@
 
 Expand to Level (Outliner 1.14.0): top More scopes depth to the current focused branch (anchor level 0, direct children level 1). Valid typing and arrow tap/hold/drag update immediately; Apply normalizes the displayed level once. Idle numbers describe actual visible expansion: exact patterns are bright, otherwise the equally weighted visible branch endpoint depths are averaged and rounded to the nearest integer (.5 upward), shown dim. Natural short leaves do not falsely dim an exact pattern. Active drafts/holds retain their value. A continuous typing or held adjustment shares one app Undo step. Invalid/composing drafts do not mutate. Deliberate accepted depth commands, including normalized no-ops, enable Sync Collapse; observation, manual changes and Undo/Redo never enable it or enforce depth. Physical-device acceptance of this revision is pending.
 
-Unpublished local build: **Outliner1.19.5 / MindMap1.17.3 / API1**. The latest presentation and text-file notes at the end of this document supersede older release notes. Outliner 1.17.1 corrects the measured iPad Safari scroll reset on branch toggles. The owner confirmed the scroll fix in physical iPad Safari. Physical Safari file handling remains pending. The previously recorded large-font PDF export constraint remains open.
+Unpublished local build: **Outliner1.19.6 / MindMap1.17.3 / API1**. The latest presentation and text-file notes at the end of this document supersede older release notes. Outliner 1.17.1 corrects the measured iPad Safari scroll reset on branch toggles. The owner confirmed the scroll fix in physical iPad Safari. Physical Safari file handling remains pending. The previously recorded large-font PDF export constraint remains open.
 
 Multiline titles in horizontal sibling rows and separate trees start centered. If a left-side child connector misses the last visible title line, the title shares a left edge that brings the line over the connector. This also applies in Down columns. Descriptions retain their independent alignment.
 
@@ -609,6 +609,10 @@ Use **Import .txt to Home** in More beside Search to append the file's top-level
 
 Outliner advertises `focus-collapse-v1` under API 1. With Sync Collapse on, the shell honors the current focused node's saved open flag, including a pin on the same node. A pin on another node keeps its existing direct-child exception. Compatible Outliners without this capability retain the previous projection. The persisted outline format is unchanged.
 
+
+## Current outline text format
+
+Outliner 1.19.6 writes `[moa]` and `[/moa]` around text that carries multiline titles, spacers, custom Map Size or children-in-one-row settings. The wrapper uses the same quoted titles and metadata as the earlier v4 format. Regular outline text keeps its existing format. Import accepts both the new wrapper and the earlier numbered headers from `[moa v=1]` to `[moa v=4]`. The earlier numbered examples in this README describe historical formats. Photo project ZIPs use their existing format.
 
 ## Photo attachments and portable files
 

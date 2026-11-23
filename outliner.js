@@ -1,4 +1,4 @@
-/* Outliner version 1.19.5 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.19.6 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -784,12 +784,12 @@ ${textMenuActions([['visible', ' Visible'], ['node', '']])}${menuSeparator}<butt
 <div class="toast" id="ol-toast"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
-function encodeNodeText(node, depth, version, titleOverride) {
+function encodeNodeText(node, depth, quoted, titleOverride) {
   const parts = splitNodeText(node.text, node.titleLineCount);
   const title = titleOverride ?? parts.title;
   const lines = parts.hasDescription ? parts.description.split('\n') : [];
   const prefix = '  '.repeat(depth);
-  const out = [prefix + '- ' + (version >= 3 ? JSON.stringify(title) : title)];
+  const out = [prefix + '- ' + (quoted ? JSON.stringify(title) : title)];
   if (lines.length) {
     const bodyPrefix = prefix + '  ';
     out.push(bodyPrefix + '[desc]');
@@ -801,9 +801,9 @@ function encodeNodeText(node, depth, version, titleOverride) {
 function decodeDescriptionOutline(text, allowPlainOutline = false) {
   // Accept one conventional terminal line ending; no extra trailing content.
   if(/\[\/moa\](?:\r?\n)$/.test(text))text=text.replace(/\r?\n$/, '');
-  const quotedHeader=/^ *\[moa v=[34]\](\r?\n|$)/.exec(text);
-  if (allowPlainOutline && !/^ *\[moa v=/.test(text)) text = text.replace(/\r?\n$/, '');
-  // In LF v3/v4 documents a description's literal CR remains payload. A CRLF
+  const quotedHeader=/^ *\[moa(?: v=[34])?\](\r?\n|$)/.exec(text);
+  if (allowPlainOutline && !/^ *\[moa(?:\]| v=)/.test(text)) text = text.replace(/\r?\n$/, '');
+  // In LF documents with quoted titles a description's literal CR remains payload. A CRLF
   // envelope declares conventional CRLF transport; remove only that added CR.
   const raw = (quotedHeader&&quotedHeader[1]!=='\r\n'?text:text.replace(/\r\n/g, '\n')).split('\n');
   // Only the first physical line can declare an extended document.
@@ -814,9 +814,9 @@ function decodeDescriptionOutline(text, allowPlainOutline = false) {
   let lines = raw.map(line => line.slice(common)), extended=false,codecVersion=1;
   const attempted=reject.attempted;
   if(attempted){
-    const header=/^\[moa v=([1-4])\]$/.exec(lines[0]);
+    const header=/^\[moa(?: v=([1-4]))?\]$/.exec(lines[0]);
     if(!header||lines[lines.length-1]!=='[/moa]')return reject;
-    codecVersion=Number(header[1]);extended=true;lines=lines.slice(1,-1);
+    codecVersion=Number(header[1] ?? 4);extended=true;lines=lines.slice(1,-1);
   }
   const items = [], stack = [];
   let owner = null, ownerDepth = -1, mayDescribe = false, recognized = extended, mayPresent=false;
@@ -2298,22 +2298,17 @@ function toText(list, visible) {
 function serializeOutline(list, visible, photoMarkers = false) {
   const entries=[];
   (function w(l,d){for(const n of l){if(n===phNode&&!n.text)continue;entries.push({n,d});w(visible?shownKids(n):n.children,d+1);}})(list||(zoom!==root?[zoom]:visible?shownKids(zoom):zoom.children),0);
-  let extended=false,codecVersion=1;
-  for(const {n} of entries){
-    if(n.childrenInRow){extended=true;codecVersion=4;}
-    else if(n.titleLineCount>1){extended=true;codecVersion=Math.max(3,codecVersion);}
-    else if(n.kind==='spacer'||(n.mapSize??1)!==1){extended=true;const units=mapSizeUnits(n.mapSize??1);if(codecVersion<2&&(units>100000||units%100))codecVersion=2;}
-  }
+  const extended = entries.some(({n}) => n.childrenInRow || n.titleLineCount > 1 || n.kind === 'spacer' || (n.mapSize ?? 1) !== 1);
   const out=entries.map(({n,d})=>{
     const photoCount = photoMarkers ? n.photos?.length : 0;
     const photoTitle = photoCount === 1 ? '[Photo]' : photoCount > 1 ? `[${photoCount} photos]` : undefined;
-    const encoded=encodeNodeText(n,d,codecVersion,photoTitle).split('\n');
+    const encoded=encodeNodeText(n,d,extended,photoTitle).split('\n');
     if(n.kind==='spacer'||(n.mapSize??1)!==1||n.childrenInRow){
       encoded.splice(1,0,'  '.repeat(d+1)+'[map '+(n.kind==='spacer'?'spacer ':'')+'size='+(n.mapSize??1)+(n.childrenInRow?' children=row':'')+']');
     }
     return encoded.join('\n');});
   const body = out.join('\n');
-  return {text: extended ? '[moa v='+codecVersion+']\n'+body+'\n[/moa]' : body, first: entries[0]?.n, entries};
+  return {text: extended ? '[moa]\n'+body+'\n[/moa]' : body, first: entries[0]?.n, entries};
 }
 const toastEl = container.querySelector('#ol-toast');
 const baseToastDuration = 1400;
@@ -3422,5 +3417,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.19.5', apiVersion: 1, capabilities: ['snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.19.6', apiVersion: 1, capabilities: ['snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
