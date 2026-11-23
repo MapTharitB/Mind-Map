@@ -1,4 +1,4 @@
-/* MindMap 1.15.0 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.15.1 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -324,21 +324,39 @@ function measureTextBlock(node,MD){
     bottom=previous.baseline+Math.max(previous.descent,fs*(C.LINE_H-C.BASELINE_FRAC));
   }
   const block={runs,titleWidth,descriptionWidth:runs.reduce((w,run)=>run.description?Math.max(w,run.width):w,0),width,bottom,extraHeight:Math.max(0,bottom-node.fs)};
+  if(node.titleLines?.length>1&&node.description===undefined){
+    for(let i=runs.length-1;i>=0;i--){
+      const run=runs[i];
+      if(run.text.trim()&&run.right+run.left>0){block.lastTitleInk=run;break;}
+    }
+  }
   alignTextBlock(block,false);
   return block;
 }
-// Incoming placement owns alignment; all consumers share these measured run coordinates.
-// Titles follow incoming placement; descriptions can follow the final immediate-child layout.
-function alignTextBlock(block,leftAligned,descriptionLeftAligned=leftAligned,descriptionAnchor=block.descriptionAnchor??0){
+const centeredTitleX=(block,run)=>(block.titleWidth-run.width)/2;
+// Ordinary alignment follows incoming placement. Correct a missed outgoing shaft using visible ink.
+function titleStartOverSpine(block,spine){
+  const run=block.lastTitleInk,centered=centeredTitleX(block,run),left=-run.left,right=run.right;
+  const tolerance=1e-9*Math.max(1,Math.abs(spine),Math.abs(centered+left),Math.abs(centered+right));
+  if(spine>=centered+left-tolerance&&spine<=centered+right+tolerance)return null;
+  if(spine<left-tolerance)return null; // Preserve leading indentation.
+  return spine<=right+tolerance?0:spine-(left+right)/2;
+}
+// All consumers share these measured run coordinates, including independently aligned descriptions.
+function alignTextBlock(block,leftAligned,descriptionLeftAligned=leftAligned,descriptionAnchor=block.descriptionAnchor??0,titleStart=null){
   if(!block.runs.length)return false;
   block.leftAligned=leftAligned;block.descriptionAnchor=descriptionAnchor;
   // A short left-aligned paragraph sits over its outgoing shaft; longer ones stop at the left edge.
   const descriptionX=Math.max(0,descriptionAnchor-block.descriptionWidth/2);
   let changed=false;
-  for(const run of block.runs){const x=(run.description?descriptionLeftAligned:leftAligned)?(run.description?descriptionX:0):(block.titleWidth-run.width)/2;changed=changed||run.x!==x;run.x=x;}
+  for(const run of block.runs){
+    const x=run.description?(descriptionLeftAligned?descriptionX:centeredTitleX(block,run)):
+      titleStart??(leftAligned?0:centeredTitleX(block,run));
+    changed=changed||run.x!==x;run.x=x;
+  }
   block.minX=block.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0);
   block.maxX=block.runs.reduce((max,run)=>Math.max(max,run.x+Math.max(run.width,run.right)),block.titleWidth);
-  if(block.runs.some(run=>run.description))block.width=block.maxX-block.minX;
+  block.width=titleStart!==null||block.runs.some(run=>run.description)?block.maxX-block.minX:block.titleWidth;
   return changed;
 }
 function attachNodeTexts(root,texts,counts){
@@ -504,7 +522,7 @@ function forcesChildRow(node){
   return node.childrenInRow===true&&node.family.count>=2;
 }
 // One bottom-up footprint record per node; placement never remeasures descendants.
-function measureSubtree(node,MD,nominal=false,reuseChildren=false){
+function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=false){
   if(!reuseChildren)node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
   let height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
@@ -513,11 +531,20 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
   const ownBottom=Math.max(node.textBlock.bottom,...node.textBlock.runs.map(run=>run.baseline+run.descent));
   let minY=ownTop;
   const forced=forcesChildRow(node);
+  const rootStack=node.layoutDepth===0&&rootChildrenStacked(node);
+  const rootColumns=rootStack?rootChildColumns(node):0;
+  let spine;
   let horizontal=forced||layoutPreferences.horizontalFamily(node);
   if(children.length){
     const alignChildren=stacked=>{
-      const leftAligned=node.layoutDepth===0?rootChildrenStacked(node):stacked;
-      for(const ch of children)if(alignTextBlock(ch.textBlock,leftAligned,ch.family.count?ch.subtree.childMode==='vertical':leftAligned))measureSubtree(ch,MD,nominal,true);
+      const leftAligned=node.layoutDepth===0?rootStack:stacked;
+      for(const ch of children){
+        const block=ch.textBlock;
+        if(block.leftAligned===leftAligned||!block.runs.length)continue;
+        const changed=alignTextBlock(block,leftAligned,ch.family.count?ch.subtree.childMode==='vertical':leftAligned);
+        // Reevaluate eligible titles even when two placements happen to use the same starting X.
+        if(changed||block.lastTitleInk&&ch.family.count)measureSubtree(ch,MD,nominal,true);
+      }
     };
     alignChildren(!horizontal);
     if(horizontal){
@@ -548,7 +575,7 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
     if(!horizontal){
       const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1,subGap=familySubGap(node);
       let y=node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
-      const spine=spineOffsetOf(node);
+      spine=spineOffsetOf(node);
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
       // Reserve the incoming vertical shaft corridor, including stroke and measured ink.
       // A one-column WRAP also gives first-level children this incoming shaft.
@@ -566,11 +593,15 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
       height=Math.max(height,y);
     }
   }
-  // Resolve descriptions only after length-limit fallback; leaves keep their own alignment.
-  const descriptionLeft=node.family.count?(node.layoutDepth===0?rootChildrenStacked(node):!horizontal):node.textBlock.leftAligned;
-  const descriptionAnchor=node.family.count&&descriptionLeft?(node.layoutDepth===0&&Math.min(layoutPreferences.hlimitN,packingUnits(children).length)>1?titleWidth(node)/2:spineOffsetOf(node)):0;
-  alignTextBlock(node.textBlock,node.textBlock.leftAligned,descriptionLeft,descriptionAnchor);
-  let minX=nominal?0:node.textBlock.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0),maxX=nominal?nodeWidth(node):node.textBlock.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node));
+  // Resolve outgoing alignment after Length has chosen the final child layout.
+  const block=node.textBlock;
+  const descriptionLeft=node.family.count?(node.layoutDepth===0?rootStack:!horizontal):block.leftAligned;
+  const descriptionAnchor=node.family.count&&descriptionLeft?(rootColumns>1?titleWidth(node)/2:spine):0;
+  const hasLeftShaft=separateRoot?rootColumns===1:node.layoutDepth>0&&!horizontal;
+  const titleStart=node.family.count&&hasLeftShaft&&!block.leftAligned&&block.lastTitleInk?titleStartOverSpine(block,spine):null;
+  alignTextBlock(block,block.leftAligned,descriptionLeft,descriptionAnchor,titleStart);
+  let minX=titleStart!==null?block.minX:nominal?0:block.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0);
+  let maxX=titleStart!==null?block.maxX:nominal?nodeWidth(node):block.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node));
   for(const offset of offsets){minY=Math.min(minY,offset.y+offset.node.subtree.minY);minX=Math.min(minX,offset.x+offset.node.subtree.minX);maxX=Math.max(maxX,offset.x+offset.node.subtree.maxX);}
   if(customSize){
     const connected=offsets.filter(offset=>offset.node.kind!=='spacer');
@@ -582,7 +613,6 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false){
           minX=Math.min(minX,center-half);maxX=Math.max(maxX,center+half);
         }
       }else{
-        const spine=spineOffsetOf(node);
         minX=Math.min(minX,spine-half);
         maxX=Math.max(maxX,spine+Math.max(...connected.map(offset=>familyArm(node,offset.node.depth,MD)))*.70+half);
         for(const offset of connected)height=Math.max(height,offset.y+offset.node.fs*offset.node.capFrac+half);
@@ -655,7 +685,7 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
 function layoutGrid(root,MD,colorSeed,recolor=true){
   const d1=root.children,units=packingUnits(d1),NC=units.length;
   root.y=C.TOP_M;
-  const cols=Math.min(layoutPreferences.hlimitN,NC);
+  const cols=rootChildColumns(root);
   const ARM1=familyArm(root,d1[0].depth,MD);
   const d1Fs=familyUnit(root);
   const base=Math.floor(NC/cols),extra=NC%cols;
@@ -734,6 +764,7 @@ function rootChildrenStacked(root){
   // A lone real root child always uses the existing left-side vertical connector.
   return NC===1&&!root.synthetic||NC>0&&!layoutPreferences.hlimitInf&&NC>layoutPreferences.hlimitN;
 }
+function rootChildColumns(root){return Math.min(layoutPreferences.hlimitN,root.family.count);}
 function layoutTree(root,MD,colorSeed,recolor=true){
   return rootChildrenStacked(root)?layoutGrid(root,MD,colorSeed,recolor):layoutSimple(root,MD,colorSeed,recolor);
 }
@@ -749,14 +780,13 @@ function layout(root,colorSeed){
   roots.forEach(n=>logical(n,0));
   const MD=visualMaxD(root);annotateNodes(root,MD);
   const described=hasDescription(root),multiline=!!sourceTitleLines?.some(count=>count>1),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1);
-  const stackedRoots=root.synthetic&&layoutPreferences.rootEnabled&&layoutPreferences.rootOrder!=='across'&&layoutPreferences.rootEffective<roots.filter(n=>n.kind!=='spacer').length;
-  if(stackedRoots)roots.forEach(n=>alignTextBlock(n.textBlock,true));
+  const separateRoots=root.synthetic&&root.family.count>1;
   // Spacer-only footprints retain the original nominal widths of unaffected real branches.
   const measureAll=layoutPreferences.levelsEnabled||described||multiline||presented;
   if(measureAll||sourcePresentation?.some(p=>p.childrenInRow)){
     const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);
     const hasForcedRow=n=>forcesChildRow(n)||n.children.some(hasForcedRow);
-    for(const n of roots)if(measureAll||hasForcedRow(n))measureSubtree(n,MD,nominal);
+    for(const n of roots)if(measureAll||hasForcedRow(n))measureSubtree(n,MD,nominal,false,separateRoots);
   }
   if(!root.synthetic)return layoutTree(root,MD,colorSeed);
   // Color once in original whole-map order; outer packing only translates complete trees.
@@ -1965,5 +1995,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.15.0',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.15.1',apiVersion:1,capabilities:['text-input','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1'],mount};
 })();

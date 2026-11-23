@@ -1,4 +1,4 @@
-/* Outliner version 1.15.1 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.16.4 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -178,9 +178,6 @@ function copyPresentation(from,to){
   if(from.childrenInRow===true)to.childrenInRow=true;
   return to;
 }
-function canMarkSpacer(node){
-  return node.kind!=='spacer'&&!node.children.length&&!node.text.includes('\n')&&/^[\s\u200b]*$/u.test(node.text);
-}
 function clearSpacerKind(node){
   if(node.kind!=='spacer')return false;
   delete node.kind;return true;
@@ -207,9 +204,10 @@ const ipadCSS = String.raw`
 /* 48px nesting: centers fall between 1px guide centers at -84.5/-36.5/+11.5px. */
 .moa-outliner.ipad-safari .dots{left:-71px}
 /* Owner-approved V1.1: full glyph/width scale; vertical target fits the accepted first-line pitch. */
-.moa-outliner.ipad-safari .arrow{left:-22.5px;width:20px;font-size:32.5px;top:0;height:calc(var(--bh) * 1.15)}
+.moa-outliner.ipad-safari{--arrow-width:20px}
+.moa-outliner.ipad-safari .arrow{left:-22.5px;font-size:32.5px;top:0;height:calc(var(--bh) * 1.15)}
 /* Owner-approved iPad gutter: give the outermost More button room while retaining guide/control geometry. */
-@container moa-outline (max-width:700px){.moa-outliner.ipad-safari .sheet,.moa-outliner.ipad-safari .head{padding-left:calc(var(--gut) + 80px)}}
+@container moa-outline (max-width:700px){.moa-outliner.ipad-safari .sheet,.moa-outliner.ipad-safari .head{--gutter-padding:80px}}
 .moa-outliner.ipad-safari .arrow span{display:block;line-height:1}
 .moa-outliner.ipad-safari .arrow.open span{transform:rotate(90deg)}
 .moa-outliner.touch-moving .row.dragging,.moa-outliner.touch-moving .row.dragging *{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
@@ -218,7 +216,7 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
    The outline TEXT must stay at the same horizontal position as the original centred 1040px column: --gut is that column's old side margin
    (14px, or half of the width beyond 1040px). .sheet and .head add their old paddings on top of --gut.
    DO NOT put max-width or side padding back on .page or its children: that moves the scrollbar away from the app edge. */
-.moa-outliner{box-sizing:border-box;--text-right:max(12px,env(safe-area-inset-right,0px));--gut:max(14px,(100% - 1040px) / 2);display:flex;flex-direction:column;min-height:0;container-type:inline-size;container-name:moa-outline}
+.moa-outliner{box-sizing:border-box;--bullet-width:22px;--arrow-width:16px;--focus-control-gap:10px;--sheet-border:1px;--text-right:max(12px,env(safe-area-inset-right,0px));--gut:max(14px,(100% - 1040px) / 2);display:flex;flex-direction:column;min-height:0;container-type:inline-size;container-name:moa-outline}
 .moa-outliner *,.moa-outliner *::before,.moa-outliner *::after{box-sizing:inherit}
 .moa-outliner .page{flex:1;min-height:0;display:flex;flex-direction:column;padding:12px 0 10px}
 .moa-outliner .page>*{width:100%}
@@ -240,23 +238,33 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
    The fade (0.18s) and the idle delay (450ms in JS) are deliberately fast: the owner asked for twice as fast as the first version.
    DO NOT switch to ::-webkit-scrollbar rules (Chrome ignores them once scrollbar-color is set) and DO NOT make the scrollbar always visible.
    .sheet is the scroll container and spans the full app width; its side padding uses --gut so the text does not move. */
-.moa-outliner .sheet{background:none;border:1px solid transparent;padding:16px var(--text-right) 120px calc(var(--gut) + 88px);flex:1;min-height:0;overflow:auto;cursor:default;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .18s ease}
+.moa-outliner .sheet,.moa-outliner .head{--gutter-padding:88px;padding-left:calc(var(--gut) + var(--gutter-padding))}
+.moa-outliner .sheet{background:none;border:var(--sheet-border) solid transparent;padding-block:16px 120px;padding-right:var(--text-right);flex:1;min-height:0;overflow:auto;cursor:default;scrollbar-width:thin;scrollbar-color:transparent transparent;transition:scrollbar-color .18s ease}
 /* REQUIREMENT: Indent, Outdent, Undo and Redo are minimal icon-only buttons (arrows and circular arrows), no text labels, no border until hover. */
 .moa-outliner .ic{background:none!important;border-color:transparent!important;color:var(--mute)!important;padding:3px 8px!important;font-size:18px!important;line-height:1.1}
 .moa-outliner .ic:hover{color:var(--ink)!important;border-color:var(--line)!important}
 /* REQUIREMENT (zoom title): the zoomed-in bullet is shown as a big editable heading above its children, aligned with the bullets.
    Its font size and weight are size level 0 (49px bold, see levelStyle()) in the two hierarchy modes, plain 16px in Plain Text mode; set by head(). Its line height is the shared textarea rule. */
-.moa-outliner .head{flex:none;display:none;padding:7.5px var(--text-right) 6.5px calc(var(--gut) + 88px)}
+.moa-outliner .head{flex:none;display:none;padding-block:7.5px 6.5px;padding-right:var(--text-right)}
 /* Owner override 2026-10-16 (R12-3A): balance the complete title in the first-row slot.
    The focused sheet border adds 1px below: 7.5px above = 6.5px + 1px below.
    Total 15px plus the title's extra 2px preserves the Home child anchor (16px + 1px). */
 .moa-outliner .head.show{display:block}
+.moa-outliner .head.show,.moa-outliner .head.show + .sheet{padding-left:calc(var(--gut) + var(--gutter-padding) - var(--bullet-width) + var(--focus-gutter-inset,0px))}
 .moa-outliner .head.show + .sheet{padding-top:0}
-@container moa-outline (max-width:700px){.moa-outliner .head{padding-left:calc(var(--gut) + 56px)}}
+.moa-outliner .head-controls{position:absolute;right:100%;top:1px;height:var(--bh);display:flex;gap:var(--focus-control-gap)}
+/* The header ends at the title edge; the direct children start one sheet border farther right. */
+.moa-outliner .head.show + .sheet > .node > .row > .arrow{left:auto;right:calc(100% + var(--sheet-border))}
+.moa-outliner .head.show + .sheet > .node > .row > .dots{left:auto;right:calc(100% + var(--sheet-border) + var(--arrow-width) + var(--focus-control-gap))}
+.moa-outliner .head.show .head-controls>button{position:static;height:100%;opacity:1}
+.moa-outliner .head-controls>.arrow.hide{display:none}
 .moa-outliner .head textarea{display:block;width:100%;flex:none;font-size:var(--fs);font-weight:var(--fw);padding:4px 4px;min-height:calc(var(--lh) + 8px);color:var(--ink)}
 .moa-outliner .head textarea::placeholder{color:var(--mute)}
 .moa-outliner .sheet.sb{scrollbar-color:var(--mute) transparent}
-@container moa-outline (max-width:700px){.moa-outliner .sheet{padding-left:calc(var(--gut) + 56px)}}
+@container moa-outline (max-width:700px){
+  .moa-outliner .sheet,.moa-outliner .head{--gutter-padding:56px}
+  .moa-outliner .head.show,.moa-outliner .head.show + .sheet{--focus-gutter-inset:8px}
+}
 /* Drag-selecting several bullets. The class is removed on mouseup and also when the mouse comes back with no button pressed (endDrag).
    Do not let it stay on: it disables clicking into text. */
 .moa-outliner.multi,.moa-outliner.multi *{user-select:none;-webkit-user-select:none;cursor:default}
@@ -272,9 +280,14 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .dropline{position:fixed;display:none;height:2px;background:var(--accent);pointer-events:none;z-index:15}
 .moa-outliner .row.drop-in{background:var(--halo);box-shadow:inset 0 0 0 1px var(--accent)}
 .moa-outliner .dots{position:absolute;left:-47px;top:0;width:21px;height:var(--bh);display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:16px;opacity:0}
+.moa-outliner .dots>span{flex:none;width:30px;aspect-ratio:1;display:grid;place-items:center;border-radius:50%;pointer-events:none}
+.moa-outliner .dots:focus-visible{outline:none}
+.moa-outliner .dots:focus-visible>span{outline:1px solid var(--accent)}
 .moa-outliner .row:hover .dots,.moa-outliner .dots:focus-visible{opacity:1}
 /* Pointer feedback shares the shell palette; menu state does not change these hit boxes. */
-@media(hover:hover){.moa-outliner #ol-moreBtn:enabled:hover,.moa-outliner .dots:enabled:hover{background:var(--halo);color:var(--ink)}.moa-outliner #ol-moreBtn:enabled:hover{border-color:var(--line)}}
+@media(hover:hover){.moa-outliner #ol-moreBtn:enabled:hover{background:var(--halo);color:var(--ink);border-color:var(--line)}.moa-outliner .dots:enabled:hover{color:var(--ink)}.moa-outliner .dots:enabled:hover>span{background:var(--halo)}}
+.moa-outliner .dots:enabled:active{color:var(--ink)}
+.moa-outliner .dots:enabled:active>span{background:var(--halo)}
 .moa-outliner .menu{position:fixed;display:none;z-index:20;background:var(--page);border:1px solid var(--line);border-radius:8px;padding:4px;box-shadow:0 6px 24px rgba(0,0,0,.25);min-width:170px;overflow-y:auto;overscroll-behavior:contain}
 .moa-outliner .menu.show{display:block}
 .moa-outliner .menu button{display:block;width:100%;text-align:left;font:inherit;font-size:14px;color:var(--ink);background:none;border:0;border-radius:5px;padding:6px 10px;cursor:pointer}
@@ -287,11 +300,11 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .menu .child-row-toggle:not([hidden]){display:flex;align-items:center}
 .moa-outliner .menu .child-row-toggle::before{content:"";flex:0 0 1em}
 .moa-outliner .menu .child-row-toggle[aria-pressed="true"]::before{content:"✓" / ""}
-.moa-outliner .arrow{position:absolute;left:-13px;top:0;width:16px;height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:26px;opacity:0;transition:transform .12s,opacity .12s}
+.moa-outliner .arrow{position:absolute;left:-13px;top:0;width:var(--arrow-width);height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;line-height:1;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;font-size:26px;opacity:0;transition:transform .12s,opacity .12s}
 .moa-outliner .row:hover .arrow,.moa-outliner .arrow:focus-visible{opacity:1}
 .moa-outliner:not(.ipad-safari) .arrow span{display:block;line-height:1;transition:transform .12s}
 .moa-outliner:not(.ipad-safari) .arrow.open span{transform:rotate(90deg)}.moa-outliner .arrow.hide{visibility:hidden}
-.moa-outliner .bullet{width:22px;height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.moa-outliner .bullet{width:var(--bullet-width);height:var(--bh);flex:none;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .moa-outliner .bullet i{width:7px;height:7px;border-radius:50%;background:var(--ink);opacity:.75}
 .moa-outliner .bullet:hover i{opacity:1}
 .moa-outliner .bullet.closed::before{content:"";position:absolute;width:20px;height:20px;border-radius:50%;background:var(--halo);z-index:0}
@@ -865,6 +878,20 @@ let anchor = null, cursor = null, hist = [], hi = -1, tm = null, dragSet = null,
 // it is left out of every snapshot and of localStorage (replacer below), removed again when the user leaves that view without typing,
 // and skipped by export. phNode = the placeholder, phOwner = the bullet (or root) it was added to.
 let phNode = null, phOwner = null;
+function realChildren(node) {
+  const children = node.children;
+  return node === phOwner && children.length === 1 && children[0] === phNode && !phNode.text && !phNode.children.length ? [] : children;
+}
+function canMarkSpacer(node) {
+  return node.kind !== 'spacer' && !realChildren(node).length && !node.text.includes('\n') && /^[\s\u200b]*$/u.test(node.text);
+}
+// A saved leaf may be closed. Its first real child opens it in the same edit.
+function openPlaceholderOwner(node) {
+  if (node !== phNode || !phOwner || phOwner === root || realChildren(phOwner).length) return;
+  const owner = phOwner;
+  owner.open = true;
+  if (clearSpacerKind(owner) && headBinding?.getNode() === owner) refreshNodeEditor(headBinding);
+}
 const snap = () => JSON.stringify({ root, zoom: zoom.id }, (k, v) => k === 'children' && phNode && v.length === 1 && v[0] === phNode && !phNode.text ? [] : v);
 // Outline snapshots stay canonical strings; compound focus metadata exists only in history.
 const outlineValue = entry => typeof entry === 'string' ? entry : entry?.outline;
@@ -993,6 +1020,7 @@ function flushSave() {
   }
 }
 function save(typing) {
+  if (zoom !== root && headControls) updateChevron(headControls.arrow, zoom);
   depthController?.reconcile();
   if(adjustment?.writing){if(!adjustmentSaveTimer)adjustmentSaveTimer=setTimeout(()=>{adjustmentSaveTimer=null;flushSave();},50);}else flushSave();
   if (typing) { typingSnapshot = snap(); clearTimeout(tm); tm = setTimeout(record, 500); } else record();
@@ -1049,11 +1077,11 @@ function computeSets() {
   const w = n => { let any = false; for (const c of n.children) { const sub = w(c); if (sub) sAnc.add(c); if (sub || sKeep.has(c) || c.text.toLowerCase().includes(ql)) { sShown.add(c); any = true; } } return any; };
   w(zoom);
 }
-const isOpen = n => searching() ? (sOver.has(n) ? sOver.get(n) : sAnc.has(n)) : n.open;
+const isOpen = n => searching() ? (sOver.has(n) ? sOver.get(n) : n === zoom || sAnc.has(n)) : n.open;
 const setNodeOpen = (n, o) => { const before = isOpen(n), transient = searching(); if(n.children.length&&before!==o)depthController?.invalidate(); if (searching()) sOver.set(n, o); else n.open = o; observeToggle(n, before, isOpen(n), transient); };
 function shownKids(n) {
-  if (!searching()) return n === zoom || n.open ? n.children : [];
-  if (n !== zoom && !isOpen(n)) return [];
+  if (!searching()) return n === root || n.open || (n === zoom && !realChildren(n).length) ? n.children : [];
+  if (!isOpen(n)) return [];
   return n !== zoom && sOver.get(n) === true ? n.children : n.children.filter(c => sShown.has(c));
 }
 function vis() { const o = []; (function w(n) { for (const c of shownKids(n)) { o.push(c); w(c); } })(zoom); return o; }
@@ -1165,6 +1193,7 @@ function saveFieldCommand(binding) {
 function insertDescription(binding,start,end) {
   const n=binding.getNode(), parts=splitNodeText(n.text,n.titleLineCount);
   record();
+  openPlaceholderOwner(n);
   const tail=parts.title.slice(end);
   const description=tail+(parts.hasDescription?(tail?'\n':'')+parts.description:'');
   setNodeText(n,{title:parts.title.slice(0,start),description,hasDescription:true});
@@ -1180,6 +1209,7 @@ function bindField(binding, t) {
     const n = binding.getNode(), parts = { title: binding.title.value, description: binding.description ? binding.description.value : '', hasDescription: !!binding.description };
     if (t.dataset.role === 'description') parts.description = t.value; else parts.title = t.value;
     if(n.kind==='spacer'&&(composing||historyComposing))return n;
+    if (parts.title || parts.hasDescription) openPlaceholderOwner(n);
     setNodeText(n,parts); if(!composing&&!historyComposing&&n.text!=='')clearSpacerKind(n); if (searching() && !binding.head) sKeep.add(n);
     return n;
   };
@@ -1316,22 +1346,35 @@ function render(focusId, pos) {
   if (anchor && !par.has(anchor)) anchor = null; if (cursor && !par.has(cursor)) cursor = null;
   els.clear(); const tree = container.querySelector('#ol-tree'); tree.innerHTML = '';
   if (searching()) computeSets();
+  const children = shownKids(zoom);
+  if (zoom !== root && !isOpen(zoom) && realChildren(zoom).length) { sel.clear(); anchor = cursor = null; }
   measureBase();
-  shownKids(zoom).forEach(c => tree.appendChild(row(c, false, 0)));
-  if (searching() && !tree.firstChild) { const m = el('div', 'nomatch'); m.textContent = 'No matches'; tree.appendChild(m); }
+  children.forEach(c => tree.appendChild(row(c, false, 0)));
+  if (searching() && !sShown.size) { const m = el('div', 'nomatch'); m.textContent = 'No matches'; tree.appendChild(m); }
   tree.querySelectorAll('textarea').forEach(fit);
   crumbs(); head(); save();
   if (focusId) focusNode(focusId, pos);
 }
 // Big title for the bullet you zoomed into (hidden at Home). It edits that bullet's text.
 const titleEl = container.querySelector('#ol-title'), headEl = container.querySelector('#ol-head');
-let headBinding = null;
+let headBinding = null, headControls = null;
 function head() {
-  const on = zoom !== root; headEl.classList.toggle('show', on);
+  const on = zoom !== root, wasFocused = headEl.classList.contains('show');
+  headEl.classList.toggle('show', on);
+  const previousId = +titleEl.dataset.id;
+  if (wasFocused && previousId !== zoom.id && menuNode?.id === previousId && menu.classList.contains('show')) {
+    numericBindings.forEach(binding => binding.finish());
+    menu.classList.remove('show');
+  }
   if (!on) return;
   setLevel(headEl, mode === 'plain' ? PLAIN : 0);
-  if (!headBinding) { const host = el('div', 'tw'); titleEl.before(host); host.appendChild(titleEl); headBinding = bindNodeEditor(host, zoom, true, titleEl); }
-  else refreshNodeEditor(headBinding);
+  if (!headBinding) {
+    const host = el('div', 'tw'), controls = el('div', 'head-controls');
+    headControls = createNodeControls(() => zoom, true);
+    controls.append(headControls.more, headControls.arrow);
+    titleEl.before(host); host.append(controls, titleEl);
+    headBinding = bindNodeEditor(host, zoom, true, titleEl);
+  } else refreshNodeEditor(headBinding);
 }
 const toFirst = () => { const c = zoom.children[0]; if (c) focusNode(c.id, 0); };
 function focusNode(id, pos) {
@@ -1392,30 +1435,55 @@ let crumbRaf = 0;
 const resizeCrumbs = () => { cancelAnimationFrame(crumbRaf); crumbRaf = requestAnimationFrame(crumbs); };
 listen(window, 'resize', resizeCrumbs);
 
+function updateChevron(arrow, node) {
+  const hasChildren = !!realChildren(node).length, open = !!isOpen(node);
+  arrow.classList.toggle('hide', !hasChildren);
+  arrow.classList.toggle('open', open);
+  if (hasChildren) arrow.setAttribute('aria-expanded', String(open));
+  else arrow.removeAttribute('aria-expanded');
+}
+function createNodeControls(getNode, focused = false) {
+  const arrow = el('button', 'arrow'), more = el('button', 'dots');
+  const chevron = el('span'), dots = el('span');
+  chevron.textContent = '▸'; chevron.setAttribute('aria-hidden', 'true');
+  dots.textContent = '⋯'; dots.setAttribute('aria-hidden', 'true');
+  arrow.appendChild(chevron); more.appendChild(dots);
+  arrow.type = more.type = 'button';
+  if (!focused) arrow.tabIndex = more.tabIndex = -1;
+  arrow.title = 'Collapse / expand (Ctrl+click: all levels)';
+  more.title = 'More'; more.setAttribute('aria-label', focused ? 'More for current topic' : 'More');
+  if (!focused) updateChevron(arrow, getNode());
+  // REQUIREMENT: Ctrl/Cmd+click on the triangle = expand all / collapse all for this bullet and everything below it.
+  // The click must not select the row (see the row mousedown handler below, which skips the arrow).
+  // Ctrl/Cmd+click expands or collapses this bullet and everything under it.
+  arrow.onclick = e => {
+    const node = getNode();
+    if (!realChildren(node).length) return;
+    const open = !isOpen(node);
+    if (e.ctrlKey || e.metaKey) setOpen(node, open); else setNodeOpen(node, open);
+    render();
+  };
+  // The ... button on each bullet opens the bullet menu. DO NOT add mousedown preventDefault to it or to the triangle (rejected, see summary at the top).
+  more.onclick = e => { e.stopPropagation(); openMenu(getNode(), more); };
+  return {more, arrow};
+}
+
 // d = depth of this row in the current view (0 = top level), used only for text size and weight.
 function row(n, inSel, d) {
   const wrap = el('div', 'node'); wrap.dataset.id = n.id;
   const r = el('div', 'row'); const selOn = inSel || sel.has(n); if (selOn) r.classList.add('sel'); els.set(n, r);
   setLevel(r, base + d);
-  const ar = el('button', 'arrow' + (n.children.length ? '' : ' hide') + (isOpen(n) ? ' open' : ''));
-  const glyph = document.createElement('span'); glyph.textContent = '▸'; ar.appendChild(glyph); ar.tabIndex = -1; ar.title = 'Collapse / expand (Ctrl+click: all levels)';
-  // REQUIREMENT: Ctrl/Cmd+click on the triangle = expand all / collapse all for this bullet and everything below it.
-  // The click must not select the row (see the row mousedown handler below, which skips the arrow).
-  // Ctrl/Cmd+click expands or collapses this bullet and everything under it.
-  ar.onclick = e => { const o = !isOpen(n); if (e.ctrlKey || e.metaKey) setOpen(n, o); else setNodeOpen(n, o); render(); };
+  const {more, arrow} = createNodeControls(() => n);
   const bu = el('a', 'bullet' + (n.children.length && !isOpen(n) ? ' closed' : '')); bu.innerHTML = '<i></i>'; bu.title = 'Zoom in';
   // Owner V1.1 exception: bullet navigation opens the view without starting text entry.
   bu.onclick = () => navigate(n);
   const tw = el('div', 'tw'); bindNodeEditor(tw, n);
-  // The ... button on each bullet opens the bullet menu. DO NOT add mousedown preventDefault to it or to the triangle (rejected, see summary at the top).
-  const dt = el('button', 'dots'); dt.textContent = '⋯'; dt.tabIndex = -1; dt.title = 'More';
-  dt.onclick = e => { e.stopPropagation(); openMenu(n, dt); };
   bu.draggable = true;
   bu.ondragstart = e => { dragSet = sel.has(n) ? roots() : [n]; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', toText(dragSet)); e.dataTransfer.setDragImage(r, 10, 10); r.classList.add('dragging'); };
   bu.ondragend = () => { dragSet = null; clearDrop(); r.classList.remove('dragging'); };
   // Ctrl/Cmd/Shift+click multi-selects rows, EXCEPT when the click is on the triangle (.arrow): that is the expand-all shortcut and must not select.
   listen(r, 'mousedown', e => { if ((e.shiftKey || e.ctrlKey || e.metaKey) && !e.target.closest('.arrow')) { e.preventDefault(); pick(n, e); } });
-  r.append(dt, ar, bu, tw); wrap.appendChild(r);
+  r.append(more, arrow, bu, tw); wrap.appendChild(r);
   const kk = shownKids(n);
   if (kk.length) {
     const k = el('div', 'kids'); kk.forEach(c => k.appendChild(row(c, selOn, d + 1))); wrap.appendChild(k);
@@ -1462,8 +1530,8 @@ function enterIntent(n, t, head = false) {
 }
 function insertAfterNodeEnd(n,newNode){
   const parent=par.get(n);if(n===root||!parent)return false;
-  if(isOpen(n)&&n.children.length)n.children.unshift(newNode);
-  else parent.children.splice(parent.children.indexOf(n)+1,0,newNode);
+  if(isOpen(n)&&realChildren(n).length)n.children.unshift(newNode);
+  else { openPlaceholderOwner(n); parent.children.splice(parent.children.indexOf(n)+1,0,newNode); }
   return true;
 }
 function enter(n, t) {
@@ -1546,7 +1614,15 @@ listen(treeEl, 'dragover', e => { if (!dragSet) return; aimDrop(e); if (dropT) {
 listen(treeEl, 'dragleave', e => { if (!treeEl.contains(e.relatedTarget)) clearDrop(); });
 listen(treeEl, 'drop', e => { if (!dragSet) return; e.preventDefault(); const t = dropT, items = dragSet; dragSet = null; clearDrop(); if (t) dropTo(items, t); });
 function delItems(items) {
-  const idx = vis().indexOf(items[0]); items.forEach(rm); sel.clear(); render(null);
+  const idx = vis().indexOf(items[0]);
+  let nextFocus = zoom;
+  for (let node = zoom; node && node !== root; node = par.get(node)) {
+    if (items.includes(node)) nextFocus = par.get(node);
+  }
+  const focusRemoved = nextFocus !== zoom;
+  if (focusRemoved) { depthController?.invalidate(); zoom = nextFocus; }
+  items.forEach(rm); sel.clear(); render(null);
+  if (focusRemoved) return;
   const l = vis(), f = l[Math.max(0, Math.min(idx - 1, l.length - 1))]; if (f) focusNode(f.id);
 }
 // Bullet menu. Wording is a requirement: Expand All / Collapse All act on this bullet's subtree, Export Visible, Export, Delete.
@@ -1554,7 +1630,7 @@ const menu = container.querySelector('#ol-menu'),numericBindings=[];
 const sizeInput=container.querySelector('#ol-map-size'),sizeScope=container.querySelector('#ol-size-subtree');
 const childRowToggle=menu.querySelector('.child-row-toggle');
 let sizeComposing=false,sizeBlurPending=false,sizeDirty=false,sizeInclude=false,sizeSession=null;
-function promotePresentation(n){if(n===phNode){phNode=phOwner=null;}}
+function promotePresentation(n){if(n===phNode){openPlaceholderOwner(n);phNode=phOwner=null;}}
 function syncPresentationMenu(){
   if(!menuNode)return;const value=menuNode.mapSize??1;if(!sizeDirty&&!sizeComposing)sizeInput.value=displayMapSize(value);
   childRowToggle.hidden=menuNode.kind==='spacer'||menuNode===phNode;
@@ -1576,7 +1652,7 @@ function reconcilePresentationMenu(){
   syncPresentationMenu();syncMenuActions();
 }
 function captureSizeBaseline(n,include){
-  const entries=[],stack=[n];while(stack.length){const node=stack.pop();entries.push({node,parent:par.get(node),value:node.mapSize??1});if(include)for(let i=node.children.length-1;i>=0;i--)stack.push(node.children[i]);}return entries;
+  const entries=[],stack=[n];while(stack.length){const node=stack.pop();entries.push({node,parent:par.get(node),value:node.mapSize??1});if(include){const children=realChildren(node);for(let i=children.length-1;i>=0;i--)stack.push(children[i]);}}return entries;
 }
 function beginPresentationCommand(){
   endAdjustment();
@@ -1584,9 +1660,11 @@ function beginPresentationCommand(){
   record();
   return true;
 }
+function editorForNode(node) {
+  return node === zoom ? headBinding : els.get(node)?.querySelector('.tw')?._nodeEditor;
+}
 function refreshPresentationEditors(node){
-  updateEditorBadge(els.get(node)?.querySelector('.tw')?._nodeEditor,node);
-  if(zoom===node)updateEditorBadge(headBinding,node);
+  updateEditorBadge(editorForNode(node),node);
 }
 function presentationCommand(action,n=menuNode,value,reset=false){
   if(!n||n===root||!par.has(n)||historyComposing||sizeComposing||destroyed)return false;
@@ -1677,22 +1755,22 @@ function syncMenuActions(){
   menu.querySelector('[data-group="pin"]').hidden = placeholder; setPinnedFocus(pinnedFocusId);
   // Owner V1.1 override of the historical full-menu requirement: use actual subtree depth,
   // not the currently expanded/search-filtered rows. Selected roots share one menu policy.
-  const hasChildren = menuT.some(n => n.children.length), hasGrandchildren = menuT.some(n => n.children.some(c => c.children.length));
+  const hasChildren = menuT.some(n => realChildren(n).length), hasGrandchildren = menuT.some(n => realChildren(n).some(c => realChildren(c).length));
   menu.querySelectorAll('[data-a="expand"],[data-a="collapse"]').forEach(b => { b.hidden = !hasGrandchildren; });
   menu.querySelector('[data-a="exportVis"]').hidden = !hasChildren;
   menu.querySelector('[data-group="branches"]').hidden = !hasGrandchildren;
   menu.querySelector('[data-group="export"]').hidden = !hasChildren;
 }
 function openMenu(n, b) {
-  numericBindings.forEach(b=>b.finish());commitSize();menuNode = n;sizeDirty=false;sizeInclude=false;sizeScope.checked=false;syncPresentationMenu(); menuT = sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
+  numericBindings.forEach(b=>b.finish());commitSize();menuNode = n;sizeDirty=false;sizeInclude=false;sizeScope.checked=false;syncPresentationMenu(); menuT = n !== zoom && sel.has(n) ? roots() : [n]; const r = b.getBoundingClientRect();
   syncMenuActions();
   depthController?.close();topMenu.classList.remove('show'); positionMenu(menu, r);
 }
-const setOpen = (n, o) => { if (n.children.length) setNodeOpen(n, o); n.children.forEach(c => setOpen(c, o)); };
+const setOpen = (n, o) => { const children = realChildren(n); if (children.length) setNodeOpen(n, o); children.forEach(c => setOpen(c, o)); };
 menu.onclick = e => {
   const a = e.target.dataset.a; if (!a) return;numericBindings.forEach(b=>b.finish());if(a==='spacer'||a==='removeSpacer'){presentationCommand(a);return;} menu.classList.remove('show');
   if(a==='description'){
-    const binding=els.get(menuNode)?.querySelector('.tw')?._nodeEditor;
+    const binding=editorForNode(menuNode);
     if(binding&&!e.target.hidden&&!binding.description&&!historyComposing){
       const end=binding.title.value.length;
       insertDescription(binding,end,end);
@@ -1764,6 +1842,7 @@ function parseHtml(h) {
 }
 function insertItems(items, target, replaceEmpty) {
   const p = par.get(target); let last;
+  openPlaceholderOwner(target);
   if (replaceEmpty && !target.text.trim() && !target.children.length) {
     copyPresentation(items[0],target);target.text = items[0].text; target.children = items[0].children;if(target===phNode)promotePresentation(target);
     p.children.splice(p.children.indexOf(target) + 1, 0, ...items.slice(1));
@@ -1830,7 +1909,12 @@ async function copyText(s) {
 async function exportText(list, visible) { const s = toText(list, visible); toast(!s ? 'Nothing to export' : (await copyText(s)) ? 'Copied to clipboard' : 'Copy failed'); }
 // Escape closes whichever menu is open (top menu or bullet menu).
 listen(document, 'keydown', e => { if (!ownsEvent(e)) return; if (e.key === 'Escape') { topMenu.classList.remove('show'); menu.classList.remove('show'); } });
-function setAll(open) { depthController?.invalidate(); (function w(n) { n.children.forEach(c => { if (c.children.length) setNodeOpen(c, open); w(c); }); })(zoom); render(); }
+function setAll(open) {
+  depthController?.invalidate();
+  if (open && zoom !== root) setOpen(zoom, true);
+  else realChildren(zoom).forEach(node => setOpen(node, open));
+  render();
+}
 // Measure actual menu height; long menus remain reachable in a short visual viewport.
 function positionMenu(target, anchor, top = false) {
   const v = window.visualViewport, left = v ? v.offsetLeft : 0, y = v ? v.offsetTop : 0;
@@ -1851,12 +1935,11 @@ function createDepthController(){
   let target=1,dirty=false,composing=false,writing=false,held=false,disposed=false;
   let scopeId=null,session=null,epoch=0,compositionContext=null,suppressInput=false,acceptedDraft=null,compositionTail=null;
   const available=()=>!disposed&&!destroyed&&visibleHost()&&!searching()&&!historyComposing&&!composing&&(zoom===root||par.has(zoom));
-  function realChildren(node){
-    return node===phOwner&&node.children.length===1&&node.children[0]===phNode&&!phNode.text&&!phNode.children.length?[]:node.children;
-  }
   // Reachability determines visible match; every real descendant contributes to normalization.
   function analyze(level){
+    const scopeOpen = zoom === root || zoom.open;
     let max=0,maxVisible=0,endpointSum=0,endpointCount=0,deepestOpen=0,shallowestClosed=Infinity;const changes=[],stack=zoom===root||par.has(zoom)?[{node:zoom,depth:0,reachable:true}]:[];
+    if (stack.length && !scopeOpen && realChildren(zoom).length) changes.push({node:zoom,open:true});
     while(stack.length){
       const {node,depth,reachable}=stack.pop(),children=realChildren(node);
       if(depth){
@@ -1868,12 +1951,12 @@ function createDepthController(){
           if(reachable){if(node.open)deepestOpen=Math.max(deepestOpen,depth);else shallowestClosed=Math.min(shallowestClosed,depth); }
         }
       }
-      const nextReachable=reachable&&(depth===0||node.open);
+      const nextReachable=reachable&&(node===root||node.open);
       for(let i=children.length-1;i>=0;i--)stack.push({node:children[i],depth:depth+1,reachable:nextReachable});
     }
-    const exact=max>0&&maxVisible>deepestOpen&&maxVisible<=shallowestClosed;
-    const observed=exact?maxVisible:max?Math.max(1,Math.min(max,Math.floor(endpointSum/endpointCount+.5))):1;
-    return{max,observed,exact,match:max>0&&level>deepestOpen&&level<=shallowestClosed,changes};
+    const exact=scopeOpen&&max>0&&maxVisible>deepestOpen&&maxVisible<=shallowestClosed;
+    const observed=exact?maxVisible:endpointCount?Math.max(1,Math.min(max,Math.floor(endpointSum/endpointCount+.5))):1;
+    return{max,observed,exact,match:scopeOpen&&max>0&&level>deepestOpen&&level<=shallowestClosed,changes};
   }
   // Only an active adjustment needs a structural baseline; idle edits never scan it.
   function structure(){
@@ -2085,7 +2168,7 @@ container.querySelector('#ol-redoBtn').onclick = () => toolbarHistory('redo');
 // Global shortcuts (capture phase). Ctrl+A selects all visible bullets (not text), Ctrl+Z / Ctrl+Y undo and redo, Ctrl+C / Ctrl+X copy or cut the selection.
 // The search box and the zoom title keep their native keys. The shortcut letter is layout independent on purpose (Thai keyboard bug).
 listen(document, 'keydown', e => {
-  if (e.target && (e.target.id === 'ol-qIn' || e.target.closest('#ol-head'))) return; // the search box and title keeps its own Ctrl+A / Ctrl+Z
+  if (e.target && (e.target.id === 'ol-qIn' || e.target.closest('#ol-head textarea'))) return; // the search box and title keeps its own Ctrl+A / Ctrl+Z
   const mod = e.ctrlKey || e.metaKey, kk = e.key || '';
   // Shortcut letter: the typed Latin letter, else the physical key (so Ctrl+A / Z / Y / C / X still work on a Thai or other non-Latin layout).
   const k = /^[a-z]$/i.test(kk) ? kk.toLowerCase() : /^Key[A-Z]$/.test(e.code || '') ? e.code.slice(3).toLowerCase() : kk.toLowerCase();
@@ -2108,6 +2191,7 @@ listen(document, 'keydown', e => {
     historyShortcutOwned = a === document.body || a === document.documentElement || a === null;
     return;
   }
+  if (e.target?.closest('#ol-head button')) return;
   if (mod && k === 'a') { e.preventDefault(); const l = vis(); anchor = l[0]; cursor = l[l.length - 1]; setSel(new Set(l)); return; }
   // With no selection this handler stops here. DO NOT add code that focuses a bullet when typing or Enter is pressed with nothing focused (rejected: it causes mistypes).
   if (!sel.size) return;
@@ -2402,5 +2486,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.15.1', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.16.4', apiVersion: 1, capabilities: ['snapshot-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

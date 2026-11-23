@@ -2,7 +2,9 @@
 
 Expand to Level (Outliner 1.14.0): top More scopes depth to the current focused branch (anchor level 0, direct children level 1). Valid typing and arrow tap/hold/drag update immediately; Apply normalizes the displayed level once. Idle numbers describe actual visible expansion: exact patterns are bright, otherwise the equally weighted visible branch endpoint depths are averaged and rounded to the nearest integer (.5 upward), shown dim. Natural short leaves do not falsely dim an exact pattern. Active drafts/holds retain their value. A continuous typing or held adjustment shares one app Undo step. Invalid/composing drafts do not mutate. Deliberate accepted depth commands, including normalized no-ops, enable Sync Collapse; observation, manual changes and Undo/Redo never enable it or enforce depth. Physical-device acceptance of this revision is pending.
 
-Unpublished map features candidate: **Outliner1.15.1 / MindMap1.15.0 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+Unpublished map features candidate: **Outliner1.16.4 / MindMap1.15.1 / API1**. The authorized size/subtree/spacer/search implementation is present, but full acceptance is blocked by a demonstrated large-font PDF export constraint; physical Safari observations are also pending. The latest presentation/interchange contract at the end of this document supersedes older release notes. The preceding1.7.5/1.7.7 maintenance smoke was owner-accepted on2026-10-19. This candidate awaits the narrow owner checks described below; automated Edge tests and identity emulation do not establish physical Safari acceptance. No upload/publication has been performed.
+
+Multiline titles in horizontal sibling rows and separate trees start centered. If a left-side child connector misses the last visible title line, the title shares a left edge that brings the line over the connector. This also applies in Down columns. Descriptions retain their independent alignment.
 
 Open `index.html` by double-clicking it. Keep these four files together: `index.html`, `outliner.js`, `mindmap.js`, `README.md`. No server, build, framework, bundler or installation is required. The complete Outliner is the source of truth; Mind Map is its live view. This folder is the entire upload package.
 
@@ -136,8 +138,8 @@ Edit the single commented `MODULES` block in `index.html`:
 
 ```js
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.15.1' },
-  mindmap: { src: './mindmap.js', v: '1.15.0' }
+  outliner: { src: './outliner.js', v: '1.16.4' },
+  mindmap: { src: './mindmap.js', v: '1.15.1' }
 };
 ```
 
@@ -594,3 +596,9 @@ API 1 retains the earlier presentation capabilities and adds `node-presentation-
 Only text output carrying this setting uses `[moa v=4]`. It retains v3 title quoting and description escaping. An enabled real node has a metadata row such as `[map size=1 children=row]`. The updated app imports v1 through v4. Older apps cannot structurally import v4.
 
 A description uses 75% of the existing next-depth font size multiplied by its own node's Map Size. Its alignment still follows the visible child layout. **Download PDF** is the first action in the Mind Map More menu. Its divider uses the same vertical gap as the other sections. The existing export and error paths still apply.
+
+### Compact Focus controls
+
+A focused topic starts with More, a chevron when it has children, and its editable title. The focused title and subtree reclaim the bullet's 22px slot. At pane widths of 700px or less, Focus uses 8px of that space to keep the controls clear of the left edge. The header and its direct children share the same More and chevron columns, with a 10px gap between the buttons. Every node More highlight is a fixed 30px circle. The Focus chevron uses the same saved state as the node in Home. Search keeps temporary expansion state. Expand All and Expand to Level can reopen the branch.
+
+Outliner advertises `focus-collapse-v1` under API 1. With Sync Collapse on, the shell honors the current focused node's saved open flag, including a pin on the same node. A pin on another node keeps its existing direct-child exception. Compatible Outliners without this capability retain the previous projection. The persisted outline format is unchanged.
