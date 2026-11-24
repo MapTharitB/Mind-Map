@@ -172,8 +172,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.22.13' },
-  mindmap: { src: './mindmap.js', v: '1.19.2' }
+  outliner: { src: './outliner.js', v: '1.22.14' },
+  mindmap: { src: './mindmap.js', v: '1.20.0' }
 };
 // BEGIN SYNC FILTER
 const effectiveMapFocus=(syncFocus,pinned,focus)=>pinned??(syncFocus?focus:null);
@@ -290,7 +290,7 @@ let outline=null, sharedFocusCollapse=false, focusExpansion=false, map=null, map
 const mapVisible=()=>!covered && W>0 && H>0;
 function supports(cap, method) {return !!(map && mapModule.capabilities.includes(cap) && typeof map[method]==='function');}
 function mapCall(method, ...args) {
-  const failure=error=>{report('Mind Map',new Error((method==='exportPDF'?'PDF export':method)+' failed: '+errorText(error)));};
+  const failure=error=>{report('Mind Map',new Error(method+' failed: '+errorText(error)));};
   try {
     const result=map[method](...args);
     if(result && typeof result.then==='function')return Promise.resolve(result).catch(error=>{failure(error);return undefined;});
@@ -563,11 +563,11 @@ function presentationTransport(values){
 function flushSync(revealing=false) {
   flushSearch(revealing);
   if(seedHistory.enabled&&seedHistory.dirty)seedHistory.queueSeedDelivery();
-  if(!dirty){mapFocus.flushFit();return;}
-  if(!outline||!supports('text-input','setText')||!mapVisible()&&!revealing)return;
+  if(!dirty){mapFocus.flushFit();return true;}
+  if(!outline||!supports('text-input','setText')||!mapVisible()&&!revealing)return false;
   const generation=++projectionGeneration,currentMap=map,focusGeneration=mapFocus.generation;
   const current=()=>generation===projectionGeneration&&map===currentMap;
-  const failed=error=>{if(current())dirty=true;report(/compatibility error/i.test(errorText(error))?'Mind Map compatibility':'Mind Map',error);};
+  const failed=error=>{if(current())dirty=true;report(/compatibility error/i.test(errorText(error))?'Mind Map compatibility':'Mind Map',error);return false;};
   try {
     const projection=projectOutline(outline.getSnapshot({titleLines:true, focusExpansion}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v3','setText')||supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'),sharedFocusCollapse);
     const {text}=projection;
@@ -581,27 +581,28 @@ function flushSync(revealing=false) {
     const nodeIds=supports('outline-reveal-v1','setText')?projection.nodeIds:undefined;
     const signature=JSON.stringify([text,nodeIds,placeholderNodes,nodeTexts,outlineStats,nodePresentation,nodeHasChildren,nodeTitleLines]);
     const completed=()=>{
-      if(!current())return;
+      if(!current())return false;
       dirty=false;mapFocus.acknowledge(focusGeneration,signature);mapFocus.flushFit();
+      return true;
     };
     const delivered=()=>{
-      if(!current())return;
+      if(!current())return false;
       lastProjection=signature;
       clearTimeout(settingsTimer);settingsTimer=setTimeout(()=>{try{if(mapVisible())refreshSettings();}catch(error){report('Mind Map',error);}},220);
       if(settingsPending&&supports('settings-v1','getSettings')&&supports('settings-v1','setSettings')){
         try{
           const result=currentMap.setSettings(settings);
-          const applied=value=>{if(!current())return;settingsPending=false;persistSettings(value);completed();};
-          if(result&&typeof result.then==='function')Promise.resolve(result).then(applied).catch(failed);else applied(result);
-        }catch(error){failed(error);}
-      }else {settingsPending=false;completed();}
+          const applied=value=>{if(!current())return false;settingsPending=false;persistSettings(value);return completed();};
+          return result&&typeof result.then==='function'?Promise.resolve(result).then(applied).catch(failed):applied(result);
+        }catch(error){return failed(error);}
+      }
+      settingsPending=false;
+      return completed();
     };
-    if(signature===lastProjection)delivered();
-    else {
-      const result=currentMap.setText(text,{placeholderNodes,...(nodeIds?{nodeIds}:{}),...(nodeTitleLines?{nodeTitleLines}:{}),...(nodeHasChildren?{nodeHasChildren}:{}),...(nodePresentation?{nodePresentation}:{}),...(nodeTexts?{nodeTexts}:{}),...(outlineStats?{outlineStats}:{})});
-      if(result&&typeof result.then==='function')Promise.resolve(result).then(delivered).catch(failed);else delivered();
-    }
-  }catch(error){failed(error);}
+    if(signature===lastProjection)return delivered();
+    const result=currentMap.setText(text,{placeholderNodes,...(nodeIds?{nodeIds}:{}),...(nodeTitleLines?{nodeTitleLines}:{}),...(nodeHasChildren?{nodeHasChildren}:{}),...(nodePresentation?{nodePresentation}:{}),...(nodeTexts?{nodeTexts}:{}),...(outlineStats?{outlineStats}:{})});
+    return result&&typeof result.then==='function'?Promise.resolve(result).then(delivered).catch(failed):delivered();
+  }catch(error){return failed(error);}
 }
 function scheduleSync() {
   projectionGeneration++;dirty=true;
@@ -1023,9 +1024,26 @@ $('random-color').addEventListener('click',()=>{
   if(seedHistory.enabled){if(!seedHistory.settleSeedDraft())return;seedHistory.commitSeed(Math.floor(Math.random()*0xFFFFFF),true);}
   else changeSettings({colorSeed:Math.floor(Math.random()*0xFFFFFF)});
 });
-$('download-pdf').addEventListener('click',async()=>{
-  const button=$('download-pdf');button.disabled=true;
-  try {flushSync();await mapCall('exportPDF');refreshSettings();} catch(error) {report('Mind Map',error);} finally {button.disabled=false;}
+function showPdfNotice(message){
+  if(outline&&window.Outliner.capabilities.includes('toast-v1')&&typeof outline.showToast==='function')outline.showToast(message);
+  else report('Mind Map',message);
+}
+$('download-pdf').addEventListener('click',async event=>{
+  const button=event.currentTarget,instance=map;
+  if(button.disabled||!supports('pdf-export','exportPDF'))return;
+  button.disabled=true;
+  try{
+    // The Outliner snapshot is current before its debounced change notification.
+    dirty=true;
+    const sync=flushSync();
+    const ready=sync&&typeof sync.then==='function'?await sync:sync;
+    if(!ready||map!==instance)return;
+    if(supports('pdf-photo-export-v1','exportPDF'))await instance.exportPDF({onWarning:showPdfNotice});
+    else await instance.exportPDF();
+    if(map===instance)refreshSettings();
+  }catch(error){
+    if(map===instance)showPdfNotice('PDF export failed: '+errorText(error));
+  }finally{button.disabled=false;}
 });
 let numericFactory=null,seedAdjustmentToken=null,scalePreview=null,scalePreviewTimer=null,lastScalePreview=0;
 const numericHolds=[];
@@ -1088,15 +1106,17 @@ async function start() {
     headerContent.hidden=!wantsHeader;
     const wantsHistory=module.capabilities.includes('host-history');
     const historyOptions=wantsHistory?{historyHost:composeHistoryHost(module)}:{};
-    outline=module.mount(outlineHost,{...historyOptions,...(wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{})});
+    const toastOptions=module.capabilities.includes('toast-v1')?{toastHost:document.body}:{};
+    const paneOptions=wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{};
+    outline=module.mount(outlineHost,{...toastOptions,...historyOptions,...paneOptions});
     if(wantsPaneControls&&outline&&typeof outline.setPaneMode!=='function'&&typeof outline.destroy==='function'){
-      outline.destroy();headerContent.hidden=true;workspace.append(headerContent);outline=module.mount(outlineHost,historyOptions);
+      outline.destroy();headerContent.hidden=true;workspace.append(headerContent);outline=module.mount(outlineHost,{...toastOptions,...historyOptions});
     }
     if(!outline || typeof outline.getSnapshot!=='function' || typeof outline.on!=='function' || !['snapshot-v1','change-event','toggle-event','zoom-event'].every(cap=>module.capabilities.includes(cap)))throw new Error('Outliner live sync contract is incomplete');
     seedHistory.enable(wantsHistory&&typeof outline.commitHostHistory==='function'&&typeof outline.runHistory==='function');
     if(wantsHistory&&!seedHistory.enabled){
       outline.destroy();seedHistory.dispose();
-      outline=module.mount(outlineHost,wantsPaneControls?{paneControls:true,...(wantsHeader?{headerContent}:{})}:{});
+      outline=module.mount(outlineHost,{...toastOptions,...paneOptions});
     }
     if(seedHistory.enabled){$('color-seed').value=seedHistory.display;const destroy=outline.destroy;outline.destroy=()=>{numericHolds.forEach(b=>b.dispose());seedHistory.dispose();destroy();};}
     const hasPin=module.capabilities.includes('pin-focus-menu-v1')&&module.capabilities.includes('outline-focus-history-v1')&&seedHistory.enabled&&typeof outline.setPinnedFocus==='function';

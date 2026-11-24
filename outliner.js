@@ -1,4 +1,4 @@
-/* Outliner version 1.22.13 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.22.14 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -566,8 +566,8 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner textarea{flex:1;min-width:0;min-height:var(--bh);font:inherit;color:inherit;background:transparent;border:0;outline:0;resize:none;padding:3px 4px;overflow:hidden;line-height:var(--lh);display:block}
 .moa-outliner .kids{margin-left:11px;padding-left:20px;border-left:1px solid var(--line)}
 /* REQUIREMENT: export feedback is this small Copied toast, NOT a dialog. */
-.moa-outliner .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translate(-50%,8px);background:var(--page);color:var(--ink);border:1px solid var(--accent);border-radius:8px;padding:7px 14px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:30}
-.moa-outliner .toast.show{opacity:1;transform:translate(-50%,0)}
+#ol-toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));transform:translate(-50%,8px);width:max-content;max-width:calc(100% - 28px - env(safe-area-inset-left,0px) - env(safe-area-inset-right,0px));overflow-wrap:anywhere;background:var(--page);color:var(--ink);border:1px solid var(--accent);border-radius:8px;padding:7px 14px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:30}
+#ol-toast.show{opacity:1;transform:translate(-50%,0)}
 .moa-outliner .search{position:relative;display:flex;align-items:center}
 .moa-outliner .search input{font:inherit;font-size:13px;width:230px;background:var(--btn);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:5px 28px 5px 10px;outline:0}
 .moa-outliner .search input:focus,.moa-outliner .search.on input{border-color:var(--accent)}
@@ -796,7 +796,7 @@ ${textMenuActions([['visible', ' Visible'], ['node', '']])}${menuSeparator}<butt
 <input id="ol-import-file" type="file" accept=".txt,.zip,text/plain,application/zip" hidden>
 <input id="ol-photo-file" type="file" accept="image/*" multiple hidden>
 <dialog class="photo-viewer" aria-label="Photo viewer"><div class="photo-frame"><button class="photo-cross" type="button" aria-label="Close photo"></button><canvas role="img" aria-label="Enlarged photo" hidden></canvas><span role="status"></span></div></dialog>
-<div class="toast" id="ol-toast"></div>`;
+<div class="toast" id="ol-toast" role="status" aria-atomic="true"></div>`;
 // Session notices/persistent-storage request survive a destroy/remount.
 let saveFailureShown = false, persistRequested = false;
 function encodeNodeText(node, depth, quoted, titleOverride) {
@@ -2510,6 +2510,7 @@ function serializeOutline(list, visible, photoMarkers = false) {
   return {text: extended ? '[moa]\n'+body+'\n[/moa]' : body, first: entries[0]?.n, entries};
 }
 const toastEl = container.querySelector('#ol-toast');
+if (opts.toastHost instanceof Element) opts.toastHost.append(toastEl);
 const baseToastDuration = 1400;
 const maxWarningDuration = 3500;
 const shortestWarning = 'Copy failed';
@@ -3658,7 +3659,7 @@ if (!persistRequested) {
   try { const request = navigator.storage?.persist?.(); if (request && typeof request.catch === 'function') request.catch(() => {}); } catch (_) {}
 }
 initializePublication();
-return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
+return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, showToast: toast, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.22.13', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.22.14', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

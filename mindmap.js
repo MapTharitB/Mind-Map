@@ -1,4 +1,4 @@
-/* MindMap 1.19.2 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.20.0 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -14,6 +14,7 @@ function mapSizeUnits(value){
 function mount(container,opts={}){
   if(!(container instanceof Element))throw new TypeError('MindMap.mount requires an Element');
   let destroyed=false,pdfBusy=false,sourceText='',sourceNodeIds=null,sourcePlaceholders=[],sourceNodeTexts=null,sourceTitleLines=null,sourceStats=null,sourcePresentation=null,sourceHasChildren=null,presentationChanged=false,lastPresentationRender=0,sourceReady=false,rtimer=null,sourceRevision=0,layoutSettingsRevision=0;
+  let pdfPhotoLease=null;
   const timers=new Set(),frames=new Set(),listeners=[],objectURLs=new Set();
   const hadClass=container.classList.contains('moa-mindmap'),hadCoveredClass=container.classList.contains('map-covered');
   container.classList.add('moa-mindmap');
@@ -1185,25 +1186,34 @@ function makeHbFont(hb,tf){
   return font;
 }
 
-async function exportPDF(){
-  if(destroyed)return;
-  flushRender();
-  if(!st.lay||pdfBusy)return;
-  if(sourcePresentation?.some(node=>node.photos)) throw new Error('This map contains photos. Use an Outliner Export action to include them.');
+async function exportPDF({onWarning}={}){
+  if(destroyed||pdfBusy)return;
+  const hosted=typeof onWarning==='function';
   pdfBusy=true;container.setAttribute('aria-busy','true');
   try{
+    flushRender(true);
+    if(pendingRender)throw new Error('The map is updating. Try downloading again.');
+    if(!st.lay)return;
+    const snapshot=capturePdfLayout(st.lay);
     const [hb,tfR,tfB]=await Promise.all([
-      import('https://unpkg.com/harfbuzzjs@1.4.0'),
+      import('https://unpkg.com/harfbuzzjs@1.4.0').catch(error=>{
+        throw new Error('Could not load the PDF text engine. Check your connection, then reload and try again.',{cause:error});
+      }),
       fetchTTF(SARABUN_REGULAR_URLS),
       fetchTTF(SARABUN_BOLD_URLS),
     ]);
     if(destroyed)return;
-    if(!tfR||!tfB)reportError(new Error('PDF font download failed. Thai output may be incomplete; the original font fallback will be used.'));
     const hbFontR=makeHbFont(hb,tfR);
     const hbFontB=makeHbFont(hb,tfB);
-    _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB);
+    await _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB);
+    if(!destroyed&&(!tfR||!tfB)){
+      const message='PDF font download failed. Thai output may be incomplete.';
+      if(hosted){try{onWarning(message);}catch(error){console.error(error);}}
+      else reportError(new Error(message));
+    }
   }catch(err){
-    if(!destroyed)reportError(new Error('PDF export failed: '+(err.message||err)));
+    if(destroyed)return;
+    if(!hosted)reportError(new Error('PDF export failed: '+(err.message||err)));
     throw err;
   }finally{
     pdfBusy=false;
@@ -1211,27 +1221,53 @@ async function exportPDF(){
   }
 }
 
+function capturePdfLayout(lay){
+  const {root}=lay;
+  const nodes=[],photos=new Map();
+  const collect=node=>{
+    if(!node.synthetic&&node.kind!=='spacer'){
+      const center=!node.titleLines&&node.depth===0&&node.cx!=null
+        ? {x:node.cx,label:node.label,bold:node.fw==='bold',fs:node.fs} : null;
+      const labels=node.textBlock.runs.map(run=>({
+        x:run.x,y:node.y+run.baseline,text:run.text,bold:run.fw==='bold',fs:run.fs,color:labelColor(node,run.description)
+      }));
+      const images=(node.textBlock.photos||[]).map(({photo,x,y,w,h})=>{
+        photos.set(photo.id,photo);
+        return {id:photo.id,x:node.x+x,y:node.y+y,w,h};
+      });
+      nodes.push({x:node.x,center,labels,images});
+    }
+    node.children.forEach(collect);
+  };
+  collect(root);
+  const filename=safeFileName(root.synthetic?root.children[0]?.label||'MindMap':root.label)+' Mind-Map.pdf';
+  return {nodes,photos,filename,bounds:contentBounds(lay),segments:getConnSegments(lay)};
+}
+
 /* ── PDF object store ── */
 function createPdfStore(){
   let _oid=0;
   const nid=()=>++_oid;
   const objArr=[];
-  function set(id,content){objArr[id-1]=`${id} 0 obj\n${content}\nendobj\n`;}
+  function set(id,...parts){objArr[id-1]=new Blob([`${id} 0 obj\n`,...parts,'\nendobj\n']);}
+  function setStream(id,data,entries=''){
+    const content=data instanceof Blob?data:new Blob([data]);
+    set(id,`<< /Length ${content.size}${entries?' '+entries:''} >>\nstream\n`,content,'\nendstream');
+  }
   function totalObjs(){return _oid;}
   function assembleBody(baseOffset=0){
     const offs=[],parts=[];let pos=baseOffset;
-    for(const o of objArr){offs.push(pos);parts.push(o);pos+=o.length;}
-    return{body:parts.join(''),offs,xrefPos:pos};
+    for(const o of objArr){offs.push(pos);parts.push(o);pos+=o.size;}
+    return{parts,offs,xrefPos:pos};
   }
-  return{nid,set,totalObjs,assembleBody};
+  return{nid,set,setStream,totalObjs,assembleBody};
 }
 
 /* ── TTF font embedding ── */
-function embedTTFFont(setObj,tf,t0Id,cidId,dscId,fid,ucId,bname){
+function embedTTFFont({set:setObj,setStream},tf,t0Id,cidId,dscId,fid,ucId,bname){
   if(!tf)return;
   const H='0123456789abcdef';
   let hex='';for(let i=0;i<tf.data.length;i++){const b=tf.data[i];hex+=H[b>>4]+H[b&0xF];}
-  const hexLen=hex.length+1;
   const g2u=new Map();
   for(const[cp,g]of tf.u2g)if(!g2u.has(g))g2u.set(g,cp);
   const _fw2=bname.includes('Bold')?'bold':'normal';
@@ -1254,8 +1290,8 @@ function embedTTFFont(setObj,tf,t0Id,cidId,dscId,fid,ucId,bname){
   setObj(t0Id,`<< /Type /Font /Subtype /Type0 /BaseFont /${bname} /Encoding /Identity-H /DescendantFonts [${cidId} 0 R] /ToUnicode ${ucId} 0 R >>`);
   setObj(cidId,`<< /Type /Font /Subtype /CIDFontType2 /BaseFont /${bname} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${dscId} 0 R /DW ${dw} /W [${wArr}] >>`);
   setObj(dscId,`<< /Type /FontDescriptor /FontName /${bname} /Flags 4 /FontBBox [${sc.join(' ')}] /ItalicAngle 0 /Ascent ${pA} /Descent ${pD} /CapHeight ${Math.round(pA*0.72)} /StemV 80 /FontFile2 ${fid} 0 R >>`);
-  setObj(fid,`<< /Length ${hexLen} /Filter /ASCIIHexDecode /Length1 ${tf.data.length} >>\nstream\n${hex}>\nendstream`);
-  setObj(ucId,`<< /Length ${tuc.length} >>\nstream\n${tuc}\nendstream`);
+  setStream(fid,hex+'>',`/Filter /ASCIIHexDecode /Length1 ${tf.data.length}`);
+  setStream(ucId,tuc);
 }
 
 function resolvePdfFont(tfR,tfB,isB){
@@ -1263,10 +1299,65 @@ function resolvePdfFont(tfR,tfB,isB){
   if(tfR)return{tf:tfR,slot:'F3'};if(tfB)return{tf:tfB,slot:'F4'};return{tf:null,slot:'F1'};
 }
 
-function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
-  const{root}=st.lay;
+function readPdfPhoto(canvas,image){
+  const width=canvas.width=image.naturalWidth,height=canvas.height=image.naturalHeight;
+  try{
+    const photoCtx=canvas.getContext('2d',{willReadFrequently:true});
+    photoCtx.drawImage(image,0,0);
+    const {data}=photoCtx.getImageData(0,0,width,height);
+    const rgb=new Uint8Array(width*height*3);
+    let alpha=null;
+    for(let pixel=0,source=0,target=0;source<data.length;pixel++,source+=4){
+      rgb[target++]=data[source];
+      rgb[target++]=data[source+1];
+      rgb[target++]=data[source+2];
+      const opacity=data[source+3];
+      if(!alpha&&opacity!==255){
+        alpha=new Uint8Array(width*height);
+        alpha.fill(255,0,pixel);
+      }
+      if(alpha)alpha[pixel]=opacity;
+    }
+    return {width,height,rgb,alpha};
+  }finally{canvas.width=canvas.height=1;}
+}
+
+async function writePdfImages(store,photos){
+  const names=new Map(),scratch=document.createElement('canvas');
+  const canCompress=typeof CompressionStream==='function';
+  async function writeImage(samples,width,height,colorSpace,mask=''){
+    const id=store.nid();
+    const data=canCompress?await new Response(new Blob([samples]).stream().pipeThrough(new CompressionStream('deflate'))).blob():samples;
+    const filter=canCompress?' /Filter /FlateDecode':'';
+    store.setStream(id,data,`/Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace ${colorSpace} /BitsPerComponent 8${filter}${mask}`);
+    return id;
+  }
+  for(const photo of photos.values()){
+    let samples;
+    try{
+      pdfPhotoLease=opts.acquirePhoto(photo,'detail');
+      const image=await pdfPhotoLease.ready;
+      if(destroyed)return names;
+      samples=readPdfPhoto(scratch,image);
+    }catch(error){
+      throw new Error('Could not load a photo for the PDF. Try opening it in the Outliner.',{cause:error});
+    }finally{
+      pdfPhotoLease?.release();
+      pdfPhotoLease=null;
+    }
+    const {rgb,alpha,width,height}=samples;
+    const mask=alpha?` /SMask ${await writeImage(alpha,width,height,'/DeviceGray')} 0 R`:'';
+    if(destroyed)return names;
+    const id=await writeImage(rgb,width,height,'/DeviceRGB',mask);
+    if(destroyed)return names;
+    names.set(photo.id,{name:'Im'+(names.size+1),id});
+  }
+  return names;
+}
+
+async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
   const PDF_SCALE=0.25;
-  const cb=contentBounds(st.lay);
+  const cb=snapshot.bounds;
   const PAD=Math.round(Math.max(cb.w,cb.h)*TREE_PAD_FRAC);
   const pgW=+((cb.w+PAD*2)*PDF_SCALE).toFixed(3);
   const pgH=+((cb.h+PAD*2)*PDF_SCALE).toFixed(3);
@@ -1290,13 +1381,17 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
   };
 
   const store=createPdfStore();
-  const{nid,set:setObj}=store;
+  const{nid,set:setObj,setStream}=store;
   const catId=nid(),pagesId=nid(),pageId=nid(),stmId=nid(),f1Id=nid(),f2Id=nid();
   let f3Id,f3CId,f3DId,f3FId,f3UId;
   if(tfR){f3Id=nid();f3CId=nid();f3DId=nid();f3FId=nid();f3UId=nid();}
   let f4Id,f4CId,f4DId,f4FId,f4UId;
   if(tfB){f4Id=nid();f4CId=nid();f4DId=nid();f4FId=nid();f4UId=nid();}
   const fontRes=`/F1 ${f1Id} 0 R /F2 ${f2Id} 0 R`+(tfR?` /F3 ${f3Id} 0 R`:'')+(tfB?` /F4 ${f4Id} 0 R`:'');
+  const images=snapshot.photos.size?await writePdfImages(store,snapshot.photos):new Map();
+  if(destroyed)return;
+  const imageRes=images.size
+    ? ' /XObject << '+Array.from(images.values(),({name,id})=>`/${name} ${id} 0 R`).join(' ')+' >>' : '';
 
   const renderLabel=(x,y,label,isB,fs,col)=>{
     const{tf,slot:fontSlot}=resolvePdfFont(tfR,tfB,isB);
@@ -1376,7 +1471,7 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
 
   const ops=[];
   ops.push('q 1 J 1 j');
-  for(const s of getConnSegments(st.lay)){
+  for(const s of snapshot.segments){
     ops.push(`${pdfRgb(s.col)} RG ${(s.lw*PDF_SCALE).toFixed(3)} w ${px(s.x1)} ${py(s.y1)} m ${px(s.x2)} ${py(s.y2)} l S`);
   }
   ops.push('Q');
@@ -1393,38 +1488,39 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
     }
     return w*fs*PDF_SCALE/1000;
   };
-  const dtNode=n=>{
-    if(!n.synthetic&&n.kind!=='spacer'){
-      const isB=n.fw==='bold';
-      const tx=!n.titleLines&&n.depth===0&&n.cx!=null?px(n.cx)-pdfStrW(n.label,isB,n.fs)/2:px(n.x);
-      for(const run of n.textBlock.runs)ops.push(renderLabel(tx+run.x*PDF_SCALE,py(n.y+run.baseline),run.text,run.fw==='bold',run.fs,labelColor(n,run.description)));
+  for(const {x,center,labels,images:placements} of snapshot.nodes){
+    const tx=center?px(center.x)-pdfStrW(center.label,center.bold,center.fs)/2:px(x);
+    for(const label of labels)ops.push(renderLabel(tx+label.x*PDF_SCALE,py(label.y),label.text,label.bold,label.fs,label.color));
+    for(const box of placements){
+      const {name}=images.get(box.id);
+      const width=(box.w*PDF_SCALE).toFixed(6),height=(box.h*PDF_SCALE).toFixed(6);
+      ops.push(`q ${width} 0 0 ${height} ${px(box.x)} ${py(box.y+box.h)} cm /${name} Do Q`);
     }
-    n.children.forEach(dtNode);
-  };
-  dtNode(root);
+  }
 
   const stream=ops.join('\n');
   setObj(catId,`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
   setObj(pagesId,`<< /Type /Pages /Kids [${pageId} 0 R] /Count 1 >>`);
-  setObj(pageId,`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pgW} ${pgH}] /Contents ${stmId} 0 R /Resources << /Font << ${fontRes} >> >> >>`);
-  setObj(stmId,`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);
+  setObj(pageId,`<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${pgW} ${pgH}] /Contents ${stmId} 0 R /Resources << /Font << ${fontRes} >>${imageRes} >> >>`);
+  setStream(stmId,stream);
   setObj(f1Id,`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>`);
   setObj(f2Id,`<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>`);
-  if(tfR)embedTTFFont(setObj,tfR,f3Id,f3CId,f3DId,f3FId,f3UId,'Sarabun-Regular');
-  if(tfB)embedTTFFont(setObj,tfB,f4Id,f4CId,f4DId,f4FId,f4UId,'Sarabun-Bold');
+  if(tfR)embedTTFFont(store,tfR,f3Id,f3CId,f3DId,f3FId,f3UId,'Sarabun-Regular');
+  if(tfB)embedTTFFont(store,tfB,f4Id,f4CId,f4DId,f4FId,f4UId,'Sarabun-Bold');
 
-  const hdr='%PDF-1.4\n';
-  const{body,offs,xrefPos}=store.assembleBody(hdr.length);
+  const headerParts=['%PDF-1.4\n'];
+  // A PDF with binary streams marks its header as binary.
+  if(images.size)headerParts.push(new Uint8Array([37,226,227,207,211,10]));
+  const hdr=new Blob(headerParts);
+  const{parts,offs,xrefPos}=store.assembleBody(hdr.size);
   const totalObjs=store.totalObjs();
   let xref=`xref\n0 ${totalObjs+1}\n0000000000 65535 f \n`;
   for(const off of offs)xref+=`${String(off).padStart(10,'0')} 00000 n \n`;
   const trailer=`trailer\n<< /Size ${totalObjs+1} /Root ${catId} 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
-  const pdfStr=hdr+body+xref+trailer;
-  const bytes=Uint8Array.from({length:pdfStr.length},(_,i)=>pdfStr.charCodeAt(i)&0xFF);
-  const blob=new Blob([bytes],{type:'application/octet-stream'});
+  const blob=new Blob([hdr,...parts,xref,trailer],{type:'application/octet-stream'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
-  a.href=url;a.download=safeFileName(root.synthetic?root.children[0]?.label||'MindMap':root.label)+' Mind-Map.pdf';
+  a.href=url;a.download=snapshot.filename;
   objectURLs.add(url);container.appendChild(a);a.click();
   setTimeout(()=>{a.remove();URL.revokeObjectURL(url);objectURLs.delete(url);},1500);
 }
@@ -1901,9 +1997,9 @@ listen(canvas,'touchend',e=>{
 listen(canvas,'touchcancel',cancelGestures);
 /* ══ STRING INPUT / SETTINGS ══ */
 function schedRender(){pendingRender=true;clearTimeout(rtimer);if(paused){rtimer=null;return;}rtimer=setTimeout(()=>{rtimer=null;render();},C.RENDER_DEBOUNCE);}
-function flushRender(){clearTimeout(rtimer);rtimer=null;render();}
-function render(){
-  if(liveFrame!==null&&!holdDrawing){pendingRender=true;return;}
+function flushRender(forExport=false){clearTimeout(rtimer);rtimer=null;render(forExport);}
+function render(forExport=false){
+  if(liveFrame!==null&&!holdDrawing&&!forExport){pendingRender=true;return;}
   if(paused){pendingRender=true;return;}
   pendingRender=false;
   const text=sourceText;
@@ -2099,6 +2195,7 @@ listen(document.fonts,'loadingdone',()=>{
 function destroy(){
   clearTap();
   if(destroyed)return;cancelGestures();clearMapPhotos();destroyed=true;pendingColor=false;highlightCache=null;searchQuery='';
+  pdfPhotoLease?.release();pdfPhotoLease=null;
   observer.disconnect();listeners.forEach(remove=>remove());
   timers.forEach(id=>window.clearTimeout(id));frames.forEach(id=>window.cancelAnimationFrame(id));
   objectURLs.forEach(url=>URL.revokeObjectURL(url));objectURLs.clear();
@@ -2110,5 +2207,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.19.2',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
+window.MindMap={version:'1.20.0',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
 })();
