@@ -1,4 +1,4 @@
-/* Outliner version 1.22.14 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.22.15 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -1473,7 +1473,9 @@ const setEditorHeight = (t,height) => { t.style.height=height; if(t.dataset.role
 const fit = t => { t.style.height = 'auto'; setEditorHeight(t,t.scrollHeight + 'px'); t.scrollTop = 0; };
 
 const REGULAR_LEVEL = 2;
+const HOME_TEXT_STYLE_KEY = 'moa:outliner:homeTextStyle';
 let plainHomeText = false;
+try { plainHomeText = localStorage.getItem(HOME_TEXT_STYLE_KEY) === 'plain'; } catch (_) {}
 // Line height keeps the default 22/16 ratio; the row height adds the 6px of vertical padding so the dots stay centred on the first line.
 function levelStyle(level) {
   const fs = level === 0 ? 28 : 16, lh = Math.round(fs * 22 / 16);
@@ -2632,6 +2634,12 @@ function positionMenu(target, anchor, top = false) {
 }
 const topMenu = container.querySelector('#ol-topMenu'), moreBtn = container.querySelector('#ol-moreBtn');
 const homeTextStyle = topMenu.querySelector('.home-text-style');
+function updateHomeTextStyleMenu() {
+  homeTextStyle.querySelectorAll('button').forEach(button => {
+    button.setAttribute('aria-pressed', String((button.dataset.style === 'plain') === plainHomeText));
+  });
+}
+updateHomeTextStyleMenu();
 // Owner-approved immediate depth actions; target/draft state never enters history.
 // Idle depth is derived; only deliberate commands normalize expansion and publish intent.
 function createDepthController(){
@@ -2846,7 +2854,8 @@ topMenu.onclick = e => {
     const plain = e.target.dataset.style === 'plain';
     if (plain === plainHomeText) return;
     plainHomeText = plain;
-    homeTextStyle.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === e.target)));
+    try { localStorage.setItem(HOME_TEXT_STYLE_KEY, plain ? 'plain' : 'hierarchy'); } catch (_) {}
+    updateHomeTextStyleMenu();
     container.querySelectorAll('#ol-tree [data-home-level]').forEach(row => {
       setLevel(row, plain ? REGULAR_LEVEL : Number(row.dataset.homeLevel));
       fit(row.querySelector('textarea[data-role="title"]'));
@@ -3661,5 +3670,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, showToast: toast, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.22.14', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.22.15', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
