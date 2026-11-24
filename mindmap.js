@@ -1,4 +1,4 @@
-/* MindMap 1.20.0 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.20.1 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -1229,7 +1229,8 @@ function capturePdfLayout(lay){
       const center=!node.titleLines&&node.depth===0&&node.cx!=null
         ? {x:node.cx,label:node.label,bold:node.fw==='bold',fs:node.fs} : null;
       const labels=node.textBlock.runs.map(run=>({
-        x:run.x,y:node.y+run.baseline,text:run.text,bold:run.fw==='bold',fs:run.fs,color:labelColor(node,run.description)
+        x:run.x,y:node.y+run.baseline,text:run.text,bold:run.fw==='bold',fs:run.fs,color:labelColor(node,run.description),
+        left:run.left,right:run.right,ascent:run.ascent,descent:run.descent
       }));
       const images=(node.textBlock.photos||[]).map(({photo,x,y,w,h})=>{
         photos.set(photo.id,photo);
@@ -1299,12 +1300,12 @@ function resolvePdfFont(tfR,tfB,isB){
   if(tfR)return{tf:tfR,slot:'F3'};if(tfB)return{tf:tfB,slot:'F4'};return{tf:null,slot:'F1'};
 }
 
-function readPdfPhoto(canvas,image){
-  const width=canvas.width=image.naturalWidth,height=canvas.height=image.naturalHeight;
+function readPdfRaster(canvas,width,height,paint){
+  canvas.width=width;canvas.height=height;
   try{
-    const photoCtx=canvas.getContext('2d',{willReadFrequently:true});
-    photoCtx.drawImage(image,0,0);
-    const {data}=photoCtx.getImageData(0,0,width,height);
+    const ctx=canvas.getContext('2d',{willReadFrequently:true});
+    paint(ctx);
+    const {data}=ctx.getImageData(0,0,width,height);
     const rgb=new Uint8Array(width*height*3);
     let alpha=null;
     for(let pixel=0,source=0,target=0;source<data.length;pixel++,source+=4){
@@ -1322,8 +1323,7 @@ function readPdfPhoto(canvas,image){
   }finally{canvas.width=canvas.height=1;}
 }
 
-async function writePdfImages(store,photos){
-  const names=new Map(),scratch=document.createElement('canvas');
+async function addPdfImage(store,images,key,{rgb,alpha,width,height}){
   const canCompress=typeof CompressionStream==='function';
   async function writeImage(samples,width,height,colorSpace,mask=''){
     const id=store.nid();
@@ -1332,27 +1332,50 @@ async function writePdfImages(store,photos){
     store.setStream(id,data,`/Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace ${colorSpace} /BitsPerComponent 8${filter}${mask}`);
     return id;
   }
+  const mask=alpha?` /SMask ${await writeImage(alpha,width,height,'/DeviceGray')} 0 R`:'';
+  if(destroyed)return;
+  const id=await writeImage(rgb,width,height,'/DeviceRGB',mask);
+  if(destroyed)return;
+  images.set(key,{name:'Im'+(images.size+1),id});
+}
+
+async function writePdfImages(store,photos,images,scratch){
   for(const photo of photos.values()){
     let samples;
     try{
       pdfPhotoLease=opts.acquirePhoto(photo,'detail');
       const image=await pdfPhotoLease.ready;
-      if(destroyed)return names;
-      samples=readPdfPhoto(scratch,image);
+      if(destroyed)return;
+      samples=readPdfRaster(scratch,image.naturalWidth,image.naturalHeight,ctx=>ctx.drawImage(image,0,0));
     }catch(error){
       throw new Error('Could not load a photo for the PDF. Try opening it in the Outliner.',{cause:error});
     }finally{
       pdfPhotoLease?.release();
       pdfPhotoLease=null;
     }
-    const {rgb,alpha,width,height}=samples;
-    const mask=alpha?` /SMask ${await writeImage(alpha,width,height,'/DeviceGray')} 0 R`:'';
-    if(destroyed)return names;
-    const id=await writeImage(rgb,width,height,'/DeviceRGB',mask);
-    if(destroyed)return names;
-    names.set(photo.id,{name:'Im'+(names.size+1),id});
+    await addPdfImage(store,images,photo.id,samples);
+    if(destroyed)return;
   }
-  return names;
+}
+
+function pdfLabelRaster(label){
+  const inkWidth=label.left+label.right,inkHeight=label.ascent+label.descent;
+  if(inkWidth<=0||inkHeight<=0)return null;
+  const padding=2,maxEdge=2048;
+  // Keep small labels sharp and bound the scratch canvas even for very wide lines.
+  const scale=Math.min(Math.max(1,24/label.fs),(maxEdge-2*padding)/Math.max(inkWidth,inkHeight));
+  const width=Math.ceil(inkWidth*scale)+2*padding,height=Math.ceil(inkHeight*scale)+2*padding;
+  const x=label.left*scale+padding,y=label.ascent*scale+padding;
+  const fs=Math.min(label.fs,C.MAX_SAFE_FONT),rasterScale=scale*label.fs/fs;
+  return {
+    x:-x/scale,y:-y/scale,w:width/scale,h:height/scale,
+    width,height,paint(ctx){
+      ctx.setTransform(rasterScale,0,0,rasterScale,x,y);
+      ctx.font=(label.bold?'bold':'normal')+' '+fs+'px '+C.FONT;
+      ctx.textBaseline='alphabetic';ctx.fillStyle=label.color;
+      ctx.fillText(label.text,0,0);
+    }
+  };
 }
 
 async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
@@ -1388,10 +1411,14 @@ async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
   let f4Id,f4CId,f4DId,f4FId,f4UId;
   if(tfB){f4Id=nid();f4CId=nid();f4DId=nid();f4FId=nid();f4UId=nid();}
   const fontRes=`/F1 ${f1Id} 0 R /F2 ${f2Id} 0 R`+(tfR?` /F3 ${f3Id} 0 R`:'')+(tfB?` /F4 ${f4Id} 0 R`:'');
-  const images=snapshot.photos.size?await writePdfImages(store,snapshot.photos):new Map();
+  const images=new Map(),scratch=document.createElement('canvas');
+  if(snapshot.photos.size)await writePdfImages(store,snapshot.photos,images,scratch);
   if(destroyed)return;
-  const imageRes=images.size
-    ? ' /XObject << '+Array.from(images.values(),({name,id})=>`/${name} ${id} 0 R`).join(' ')+' >>' : '';
+  const renderImage=(key,x,y,w,h)=>{
+    const {name}=images.get(key);
+    const width=(w*PDF_SCALE).toFixed(6),height=(h*PDF_SCALE).toFixed(6);
+    return `q ${width} 0 0 ${height} ${px(x)} ${py(y+h)} cm /${name} Do Q`;
+  };
 
   const renderLabel=(x,y,label,isB,fs,col)=>{
     const{tf,slot:fontSlot}=resolvePdfFont(tfR,tfB,isB);
@@ -1430,6 +1457,8 @@ async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
       hb.shape(hbFont,buf);          // full GSUB + GPOS pass
       for(const g of buf.getGlyphInfosAndPositions())glyphs.push(g);
     }
+    // Glyph zero is .notdef. Use the browser font stack for the intact line.
+    if(glyphs.some(g=>g.codepoint===0))return null;
     // codepoint = glyph index (post-GSUB), NOT a Unicode codepoint.
     // xAdvance=0 for combining marks; yOffset = GPOS vertical displacement.
 
@@ -1490,14 +1519,24 @@ async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
   };
   for(const {x,center,labels,images:placements} of snapshot.nodes){
     const tx=center?px(center.x)-pdfStrW(center.label,center.bold,center.fs)/2:px(x);
-    for(const label of labels)ops.push(renderLabel(tx+label.x*PDF_SCALE,py(label.y),label.text,label.bold,label.fs,label.color));
-    for(const box of placements){
-      const {name}=images.get(box.id);
-      const width=(box.w*PDF_SCALE).toFixed(6),height=(box.h*PDF_SCALE).toFixed(6);
-      ops.push(`q ${width} 0 0 ${height} ${px(box.x)} ${py(box.y+box.h)} cm /${name} Do Q`);
+    for(const label of labels){
+      const text=renderLabel(tx+label.x*PDF_SCALE,py(label.y),label.text,label.bold,label.fs,label.color);
+      if(text!==null){ops.push(text);continue;}
+      const raster=pdfLabelRaster(label);
+      if(!raster)continue;
+      const key=JSON.stringify([label.text,label.bold,label.fs,label.color]);
+      if(!images.has(key)){
+        const samples=readPdfRaster(scratch,raster.width,raster.height,raster.paint);
+        await addPdfImage(store,images,key,samples);
+        if(destroyed)return;
+      }
+      ops.push(renderImage(key,x+label.x+raster.x,label.y+raster.y,raster.w,raster.h));
     }
+    for(const box of placements)ops.push(renderImage(box.id,box.x,box.y,box.w,box.h));
   }
 
+  const imageRes=images.size
+    ? ' /XObject << '+Array.from(images.values(),({name,id})=>`/${name} ${id} 0 R`).join(' ')+' >>' : '';
   const stream=ops.join('\n');
   setObj(catId,`<< /Type /Catalog /Pages ${pagesId} 0 R >>`);
   setObj(pagesId,`<< /Type /Pages /Kids [${pageId} 0 R] /Count 1 >>`);
@@ -2207,5 +2246,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.20.0',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
+window.MindMap={version:'1.20.1',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
 })();
