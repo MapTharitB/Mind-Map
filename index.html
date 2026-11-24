@@ -172,8 +172,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.19.6' },
-  mindmap: { src: './mindmap.js', v: '1.17.3' }
+  outliner: { src: './outliner.js', v: '1.21.2' },
+  mindmap: { src: './mindmap.js', v: '1.18.0' }
 };
 // BEGIN SYNC FILTER
 function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, presentationSupported = true, sharedFocusCollapse = false) {
@@ -193,7 +193,7 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
   // R11: prune the full tree bottom-up before focus/collapse; never mutate source nodes.
   const surviving = new Set(), placeholders = new Set();
   for (let i = nodes.length - 1; i >= 0; i--) {
-    const node = nodes[i], empty = !(node.titleLineCount>1)&&!node.text.replace(/\u200B/g, '').trim();
+    const node = nodes[i], empty = !node.text.replace(/\u200B/g, '').trim();
     if(node.kind==='spacer'&&!presentationSupported)continue;
     if (node.kind==='spacer' || node.photos?.length || !empty || node.children.some(child => surviving.has(child))) {
       surviving.add(node);if (empty&&node.kind!=='spacer') placeholders.add(node);
@@ -201,10 +201,13 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
   }
   // A valid zoom target pruned as an empty leaf means blank, not Home fallback.
   const start = pinnedNode ? [pinnedNode] : syncFocus && zoomNode ? [zoomNode] : snapshot.tree;
-  const collapseAnchor = sharedFocusCollapse
-    ? (pinnedNode === zoomNode ? null : pinnedNode)
-    : pinnedNode || zoomNode;
-  const included=node=>node.kind!=='spacer',canonicalRoots=snapshot.tree.filter(included);
+  const mapFocusNode = pinnedNode || (syncFocus ? zoomNode : null);
+  const focusView = snapshot.focusViews?.find(view => view.id === mapFocusNode?.id);
+  const expansion = focusView ? new Map(focusView.expansion) : null;
+  const collapseAnchor = snapshot.focusViews
+    ? (focusView ? null : pinnedNode)
+    : sharedFocusCollapse ? (pinnedNode === zoomNode ? null : pinnedNode) : pinnedNode || zoomNode;
+  const included=node=>surviving.has(node)&&node.kind!=='spacer',canonicalRoots=snapshot.tree.filter(included);
   const outlineStats={maxDepth:0,maxSiblings:0,rootCount:canonicalRoots.length,maxFirstLevel:Math.max(0,...canonicalRoots.map(node=>node.children.filter(included).length))},metrics=canonicalRoots.map(node=>({node,depth:0}));
   while(metrics.length){const {node,depth}=metrics.pop(),children=node.children.filter(included);if(node.kind!=='spacer')outlineStats.maxDepth=Math.max(outlineStats.maxDepth,depth);outlineStats.maxSiblings=Math.max(outlineStats.maxSiblings,children.length);for(const child of children)metrics.push({node:child,depth:depth+1});}
   const stack = [], lines = [], placeholderNodes = [], nodeTexts = [], nodeTitleLines = [], nodePresentation = [], nodeHasChildren = [];
@@ -215,8 +218,8 @@ function projectOutline(snapshot, syncCollapse, syncFocus, pinnedId = null, pres
     const placeholder = placeholders.has(node);
     const label = node.kind==='spacer'?'\u2063':placeholder ? '(Untitled)' : node.text.replace(/\r\n?|\n/g, ' ');
     if (placeholder) placeholderNodes.push(lines.length);
-    lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);nodeTitleLines.push(node.titleLineCount??1);nodeHasChildren.push(node.kind!=='spacer'&&node.children.some(child=>child.kind!=='spacer'));nodePresentation.push({mapSize:node.mapSize??1,kind:node.kind==='spacer'?'spacer':'node',...(node.childrenInRow?{childrenInRow:true}:{}),...(node.photos?{photos:node.photos}:{})});
-    if (!syncCollapse || node.open || node === collapseAnchor) {
+    lines.push('  '.repeat(depth) + '- ' + label); nodeTexts.push(node.text);nodeTitleLines.push(node.titleLineCount??1);nodeHasChildren.push(node.kind!=='spacer'&&node.children.some(included));nodePresentation.push({mapSize:node.mapSize??1,kind:node.kind==='spacer'?'spacer':'node',...(node.childrenInRow?{childrenInRow:true}:{}),...(node.photos?{photos:node.photos}:{})});
+    if (!syncCollapse || (expansion?.get(node.id) ?? node.open) || node === collapseAnchor) {
       for (let i = node.children.length - 1; i >= 0; i--) stack.push({node:node.children[i], depth:depth+1});
     }
   }
@@ -281,7 +284,7 @@ let layoutFrame=null,geometryGeneration=0;
 let widthFrame=null,drag=null,lastTap=null,geometryTarget=null,viewportLeft=0,viewportReady=false,viewportGeneration=0,suppressDoubleClickUntil=0;
 const branchScaleBounds={min:Number($('branch-scale').min),max:Number($('branch-scale').max)};
 let settings={lengthLimit:read('moa:map:lengthLimit',{enabled:false,ratio:1.5},v=>v&&typeof v.enabled==='boolean'&&typeof v.ratio==='number'&&Number.isFinite(v.ratio)&&v.ratio>=1&&v.ratio<=10),branchScale:read('moa:map:branchScale',2.5,v=>typeof v==='number'&&Number.isFinite(v)&&v>=branchScaleBounds.min&&v<=branchScaleBounds.max),rootLayout:read('moa:map:rootLayout',{enabled:false,count:3,followMax:false},v=>v&&typeof v.enabled==='boolean'&&Number.isSafeInteger(v.count)&&v.count>=1&&typeof v.followMax==='boolean'),horizontalLimit:{enabled:read('moa:map:hlimitEnabled',false,bool),count:read('moa:map:hlimitCount',3,v=>Number.isInteger(v)&&v>0)},deeperHorizontal:{allowLeaves:read('moa:map:allowHorizontalLeaves',true,bool),enabled:read('moa:map:deeperEnabled',false,bool),levels:read('moa:map:deeperLevels',1,v=>Number.isSafeInteger(v)&&v>=1)},siblingLimit:{enabled:read('moa:map:siblingLimitEnabled',true,bool),count:read('moa:map:siblingLimitCount',3,v=>Number.isSafeInteger(v)&&v>=1)},colorSeed:read('moa:map:colorSeed',0,v=>Number.isInteger(v)&&v>=0)};
-let outline=null, sharedFocusCollapse=false, map=null, mapModule=null, dirty=true, lastProjection=null, syncFrame=null, settingsTimer=null, settingsPending=true,projectionGeneration=0;
+let outline=null, sharedFocusCollapse=false, focusExpansion=false, map=null, mapModule=null, dirty=true, lastProjection=null, syncFrame=null, settingsTimer=null, settingsPending=true,projectionGeneration=0;
 const mapVisible=()=>!covered && W>0 && H>0;
 function supports(cap, method) {return !!(map && mapModule.capabilities.includes(cap) && typeof map[method]==='function');}
 function mapCall(method, ...args) {
@@ -551,7 +554,7 @@ function flushSync(revealing=false) {
   const current=()=>generation===projectionGeneration&&map===currentMap;
   const failed=error=>{if(current())dirty=true;report(/compatibility error/i.test(errorText(error))?'Mind Map compatibility':'Mind Map',error);};
   try {
-    const projection=projectOutline(outline.getSnapshot({titleLines:true}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v3','setText')||supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'),sharedFocusCollapse);
+    const projection=projectOutline(outline.getSnapshot({titleLines:true, focusExpansion}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v3','setText')||supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'),sharedFocusCollapse);
     const {text}=projection;
     if(projection.nodeTitleLines.some(count=>count>1)&&!supports('node-title-lines','setText'))throw new Error('Mind Map compatibility error: multiline titles require a node-title-lines capable module. Reload the matching app files.');
     const nodeTitleLines=supports('node-title-lines','setText')?projection.nodeTitleLines:undefined;
@@ -1055,6 +1058,7 @@ async function start() {
     const module=await loadModule('outliner','Outliner');
     if(!module.capabilities.includes('node-title-lines'))throw new Error('Outliner compatibility error: this shell requires a node-title-lines capable module. Reload the matching app files before editing saved multiline titles.');
     sharedFocusCollapse=module.capabilities.includes('focus-collapse-v1');
+    focusExpansion=module.capabilities.includes('focus-expansion-v1');
     const wantsPaneControls=module.capabilities.includes('pane-controls');
     const wantsHeader=wantsPaneControls&&module.capabilities.includes('header-content');
     headerContent.hidden=!wantsHeader;
@@ -1075,6 +1079,7 @@ async function start() {
     if(hasPin)outline.on('pinFocus',mapFocus.request);
     mapFocus.initialize(outline.getSnapshot({titleLines:true}),hasPin);
     ['change','toggle','zoom'].forEach(event=>outline.on(event,scheduleSync));
+    if(focusExpansion)outline.on('focusExpansion',scheduleSync);
     if(module.capabilities.includes('expansion-level-event-v1'))outline.on('expansionLevel',()=>setSyncCollapse(true));
     if(module.capabilities.includes('search-query-v1')&&typeof outline.getSearchQuery==='function'){
       outline.on('search',receiveSearch);

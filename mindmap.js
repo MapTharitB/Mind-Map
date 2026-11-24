@@ -1,4 +1,4 @@
-/* MindMap 1.17.3 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.18.0 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -482,10 +482,14 @@ function footprintH(node,MD){
 }
 // Scale only computed horizontal separation; vertical and spacer footprints stay independent.
 function horizontalGap(gap){return gap*C.HORIZONTAL_GAP_MULT;}
+function siblingPadding(gap, neighbors){
+  const cap = Math.min(...neighbors.map(node => mW('    ', node.fs, node.fw)));
+  return Math.min(horizontalGap(gap), cap);
+}
 function d1ColGap(colA,colB,ARM1,parent){
   const mxA=colA.length?Math.max(...colA.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
   const mxB=colB.length?Math.max(...colB.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
-  return horizontalGap(Math.max(ARM1*C.D1_ARM_FLOOR_R,parent?grow(parent,(mxA+mxB)*C.D1_TXT_PAD_R):(mxA+mxB)*C.D1_TXT_PAD_R));
+  return siblingPadding(Math.max(ARM1*C.D1_ARM_FLOOR_R,parent?grow(parent,(mxA+mxB)*C.D1_TXT_PAD_R):(mxA+mxB)*C.D1_TXT_PAD_R),colA.concat(colB));
 }
 function d1RowGap(nextNode,parent){return (parent?grow(parent,nextNode.baseFs*C.D1_ROW_GAP_R):nextNode.fs*C.D1_ROW_GAP_R)+nextNode.fs*thaiTierBonusFrac(nextNode.thaiTier); }
 function firstRowUpwardBonus(nodes,d1Fs){
@@ -561,7 +565,7 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=f
         if(ch.kind!=='spacer')remaining--;
         if(i+1<children.length){
           const gap=grow(node,Math.max(armLen(ch.depth,MD),ch.baseFs*C.SIBLING_GAP_R));
-          cursor+=ch.kind!=='spacer'&&remaining>0?horizontalGap(gap):gap;
+          cursor+=ch.kind!=='spacer'&&remaining>0?siblingPadding(gap,[ch,children[i+1]]):gap;
         }
       }
       const first=offsets[0],last=offsets[offsets.length-1],center=(first.x+titleWidth(first.node)/2+last.x+titleWidth(last.node)/2)/2;
@@ -667,7 +671,7 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
     if(d1[i].kind==='spacer'){xc+=d1ColW_s[i];continue;}
     const rPad=grow(root,structuralTitle(d1[i])*C.D1_TXT_PAD_R),next=nextReal.get(d1[i]);
     const lPad=next?grow(root,structuralTitle(next)*C.D1_TXT_PAD_R):0;
-    xc+=d1ColW_s[i]+(next?horizontalGap(rPad+lPad):rPad+lPad);
+    xc+=d1ColW_s[i]+(next?siblingPadding(rPad+lPad,[d1[i],next]):rPad+lPad);
   }
   for(let i=0;i<NC;i++){d1[i].x=cl[i]-(d1[i].subtree?.minX||0);assignSubtreeX(d1[i],MD);}
   for(let i=0;i<NC;i++)d1[i].cx=d1[i].x+d1TxtW[i]/2;
@@ -1682,7 +1686,7 @@ function setSearchQuery(query){
 function measurePhotos(node, block) {
   if (!node.photos?.length) return;
   const ink = inkMetrics('H', node.baseFs, node.fw);
-  const height = 2 * (ink.ascent + ink.descent) * Math.min(4, node.mapSize ?? 1);
+  const height = 6 * (ink.ascent + ink.descent) * Math.min(4, node.mapSize ?? 1);
   // Anchor to ordinary title ink and retain the center used by layout clearance.
   const gap = height / 12, y = node.fs * C.BASELINE_FRAC - ink.ascent;
   node.capFrac = (y + height / 2) / node.fs;
@@ -2112,5 +2116,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.17.3',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.18.0',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1'],mount};
 })();
