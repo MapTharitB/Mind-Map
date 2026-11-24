@@ -1,4 +1,4 @@
-/* Outliner version 1.22.12 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.22.13 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -548,6 +548,8 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .menu [hidden]{display:none}
 .moa-outliner .menu button:hover{background:var(--btn)}
 .moa-outliner .menu .sep{border-top:1px solid var(--line);margin:4px 0}
+.moa-outliner .home-text-style button::before{content:"";display:inline-block;width:1em}
+.moa-outliner .home-text-style button[aria-pressed="true"]::before{content:"✓" / ""}
 .moa-outliner .menu .child-row-toggle:not([hidden]){display:flex;align-items:center;white-space:nowrap}
 .moa-outliner .menu .child-row-toggle::before{content:"";flex:0 0 1em}
 .moa-outliner .menu .child-row-toggle[aria-pressed="true"]::before{content:"✓" / ""}
@@ -780,7 +782,12 @@ const template = String.raw`<div class="page">
 <!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
 <!-- Owner override: hierarchy styling is automatic and Expand All is the first top menu action. -->
 <!-- Owner override: file import opens first. Copy keeps the clipboard behavior and Export as .txt downloads the same outline text. -->
+<!-- Latest owner override: Home alone offers Plain Text and Hierarchy between Import and expansion. -->
 <div class="menu" id="ol-topMenu"><button data-a="importFile">Import File to Home</button>${menuSeparator}
+<div class="home-text-style" role="group" aria-label="Home text style" hidden>
+<button type="button" data-a="homeTextStyle" data-style="plain" aria-pressed="false">Plain Text</button>
+<button type="button" data-a="homeTextStyle" data-style="hierarchy" aria-pressed="true">Hierarchy</button>
+${menuSeparator}</div>
 <button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div>${menuSeparator}
 ${textMenuActions([['visible', ' Visible'], ['focus', ' Focus'], ['all', ' All']])}${menuSeparator}<button data-a="clearAll">Clear All</button></div>
 <div class="menu" id="ol-menu"><button data-a="importFile" hidden>Import File</button><div class="sep" data-group="import" role="separator" hidden></div>
@@ -1466,6 +1473,7 @@ const setEditorHeight = (t,height) => { t.style.height=height; if(t.dataset.role
 const fit = t => { t.style.height = 'auto'; setEditorHeight(t,t.scrollHeight + 'px'); t.scrollTop = 0; };
 
 const REGULAR_LEVEL = 2;
+let plainHomeText = false;
 // Line height keeps the default 22/16 ratio; the row height adds the 6px of vertical padding so the dots stay centred on the first line.
 function levelStyle(level) {
   const fs = level === 0 ? 28 : 16, lh = Math.round(fs * 22 / 16);
@@ -1735,6 +1743,7 @@ let headBinding = null, headControls = null;
 function head() {
   const on = zoom !== root, wasFocused = headEl.classList.contains('show');
   headEl.classList.toggle('show', on);
+  homeTextStyle.hidden = on;
   const previousId = +titleEl.dataset.id;
   if (wasFocused && previousId !== zoom.id && menuNode?.id === previousId && menu.classList.contains('show')) {
     numericBindings.forEach(binding => binding.finish());
@@ -1932,7 +1941,9 @@ function createNodeControls(getNode, focused = false) {
 function row(n, inSel, d) {
   const wrap = el('div', 'node'); wrap.dataset.id = n.id;
   const r = el('div', 'row'); const selOn = inSel || sel.has(n); if (selOn) r.classList.add('sel'); els.set(n, r);
-  setLevel(r, d + (zoom === root ? 0 : 1));
+  const atHome = zoom === root, level = atHome ? d : d + 1;
+  if (atHome && level < REGULAR_LEVEL) r.dataset.homeLevel = level;
+  setLevel(r, atHome && plainHomeText ? REGULAR_LEVEL : level);
   const {more, arrow} = createNodeControls(() => n);
   const bu = el('a', 'bullet' + (n.children.length && !isOpen(n) ? ' closed' : '')); bu.innerHTML = '<i></i>'; bu.title = 'Zoom in';
   // Owner V1.1 exception: bullet navigation opens the view without starting text entry.
@@ -2619,6 +2630,7 @@ function positionMenu(target, anchor, top = false) {
   target.style.top = Math.max(y + margin, Math.min(anchor.bottom + (top ? 4 : 0), y + height - r.height - margin)) + 'px';
 }
 const topMenu = container.querySelector('#ol-topMenu'), moreBtn = container.querySelector('#ol-moreBtn');
+const homeTextStyle = topMenu.querySelector('.home-text-style');
 // Owner-approved immediate depth actions; target/draft state never enters history.
 // Idle depth is derived; only deliberate commands normalize expansion and publish intent.
 function createDepthController(){
@@ -2829,6 +2841,16 @@ topMenu.onclick = e => {
   // Current owner override: Export Focus retains historical zoom scope; Export All uses Home.
   else if (a === 'copy' || a === 'download') outputOutlineText(e.target, null);
   else if (a === 'importFile') chooseOutlineFile(null);
+  else if (a === 'homeTextStyle' && zoom === root) {
+    const plain = e.target.dataset.style === 'plain';
+    if (plain === plainHomeText) return;
+    plainHomeText = plain;
+    homeTextStyle.querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button === e.target)));
+    container.querySelectorAll('#ol-tree [data-home-level]').forEach(row => {
+      setLevel(row, plain ? REGULAR_LEVEL : Number(row.dataset.homeLevel));
+      fit(row.querySelector('textarea[data-role="title"]'));
+    });
+  }
 };
 
 // Clear the complete Home tree, with one history entry even after recent typing.
@@ -3638,5 +3660,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.22.12', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.22.13', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
