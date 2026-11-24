@@ -1,4 +1,4 @@
-/* MindMap 1.18.0 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.19.2 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -13,7 +13,7 @@ function mapSizeUnits(value){
 }
 function mount(container,opts={}){
   if(!(container instanceof Element))throw new TypeError('MindMap.mount requires an Element');
-  let destroyed=false,pdfBusy=false,sourceText='',sourcePlaceholders=[],sourceNodeTexts=null,sourceTitleLines=null,sourceStats=null,sourcePresentation=null,sourceHasChildren=null,presentationChanged=false,lastPresentationRender=0,sourceReady=false,rtimer=null,sourceRevision=0,layoutSettingsRevision=0;
+  let destroyed=false,pdfBusy=false,sourceText='',sourceNodeIds=null,sourcePlaceholders=[],sourceNodeTexts=null,sourceTitleLines=null,sourceStats=null,sourcePresentation=null,sourceHasChildren=null,presentationChanged=false,lastPresentationRender=0,sourceReady=false,rtimer=null,sourceRevision=0,layoutSettingsRevision=0;
   const timers=new Set(),frames=new Set(),listeners=[],objectURLs=new Set();
   const hadClass=container.classList.contains('moa-mindmap'),hadCoveredClass=container.classList.contains('map-covered');
   container.classList.add('moa-mindmap');
@@ -161,7 +161,6 @@ const C={
   RENDER_DEBOUNCE: 180,
   BTN_DRAG_THRESH: 14,
   ANIM_FIT:        300,
-  ANIM_ZOOM:       280,
   ANIM_KB:         390,
   ANIM_KB_BTN:     350,
   ANIM_RST:        320,
@@ -251,7 +250,7 @@ function flagPlaceholders(root,indexes){
   const flagged=new Set(indexes),stack=root.synthetic?root.children.slice().reverse():[root];
   let index=0;
   while(stack.length){
-    const node=stack.pop();node.placeholder=flagged.has(index++);
+    const node=stack.pop();node.outlineId=sourceNodeIds?.[index];node.placeholder=flagged.has(index++);
     for(let i=node.children.length-1;i>=0;i--)stack.push(node.children[i]);
   }
 }
@@ -1431,40 +1430,36 @@ function _buildAndDownloadPDF(hb,hbFontR,hbFontB,tfR,tfB){
 }
 
 const st={lay:null,scale:1,panX:0,panY:0};
-const gesture={drag:null,mouseZoom:null,t1d:null,touchMoved:false,startX:0,startY:0,sequence:null,twoTap:null,twoTimer:null,suppressMouseUntil:0,suppressAux:false,pointerType:'mouse'};
+const gesture={drag:null,mouseZoom:null,t1d:null,touchMoved:false,startX:0,startY:0,sequence:null,suppressMouseUntil:0,suppressAux:false,pointerType:'mouse'};
 // Same private Safari identity as the shell; modules remain independent.
 const ipadSafari=navigator.maxTouchPoints>1&&(/iPad/i.test(navigator.userAgent)||navigator.platform==='MacIntel'&&/Macintosh/i.test(navigator.userAgent))&&/AppleWebKit/i.test(navigator.userAgent)&&/Version\//i.test(navigator.userAgent)&&/Safari\//i.test(navigator.userAgent)&&!/CriOS|FxiOS|EdgiOS|OPiOS|Chrome|Chromium|Android|Edg\/|OPR\//i.test(navigator.userAgent);
 function canvasInteraction(value){if(typeof opts.onCanvasInteraction==='function'){try{const result=opts.onCanvasInteraction(value);if(result&&typeof result.then==='function')Promise.resolve(result).catch(()=>{});}catch(error){/* Host menu failure cannot interrupt the canvas. */}}}
 const DOUBLE_INTERVAL=150;
-let tapCandidate=null,tapTimer=null,tapPair=null,provisionalPress=null;
+let tapCandidate=null,tapTimer=null,tapPair=null;
 function clearTap(){
-  clearTimeout(tapTimer);tapTimer=null;tapCandidate=null;tapPair=null;provisionalPress=null;
+  clearTimeout(tapTimer);tapTimer=null;tapCandidate=null;tapPair=null;
 }
 function confirmSingleTap(candidate){
-  if(candidate&&candidate.channel!=='two-touch'&&!paused&&!document.hidden)
+  if(candidate&&!paused&&!document.hidden)
     canvasInteraction({kind:'tap',input:candidate.channel==='mouse'?'mouse':'touch'});
 }
 function tapPress(channel,x,y,distance){
   const now=performance.now(),prior=tapCandidate;
   tapPair=null;
-  if(prior?.channel==='two-touch'&&channel==='one-touch'&&now-prior.time<DOUBLE_INTERVAL){
-    // The first contact may be joining a second chord. Never expire mid-press.
-    clearTimeout(tapTimer);tapTimer=null;provisionalPress=now;return;
-  }
-  const pressedAt=channel==='two-touch'&&provisionalPress!==null?provisionalPress:now;
-  provisionalPress=null;
   if(!prior)return;
   clearTimeout(tapTimer);tapTimer=null;tapCandidate=null;
-  if(prior.channel===channel&&pressedAt-prior.time<DOUBLE_INTERVAL&&Math.hypot(x-prior.x,y-prior.y)<distance){
+  if(prior.channel===channel&&now-prior.time<DOUBLE_INTERVAL&&Math.hypot(x-prior.x,y-prior.y)<distance){
     tapPair={channel};
-  }else if(pressedAt-prior.time>=DOUBLE_INTERVAL){
+  }else if(now-prior.time>=DOUBLE_INTERVAL){
     confirmSingleTap(prior);
   }
 }
-function tapRelease(channel,x,y,inverse=false){
+function tapRelease(channel,x,y){
   if(tapPair?.channel===channel){
-    clearTap();const r=canvas.getBoundingClientRect();canvasActivity();
-    zoomAt(x-r.left,y-r.top,inverse?1/zoomFactor():zoomFactor());return;
+    clearTap();
+    const hit=mapHit(x,y,channel==='mouse'?4:12);
+    if(hit)canvasInteraction({kind:'reveal',...hit});
+    return;
   }
   clearTap();
   const candidate=tapCandidate={channel,x,y,time:performance.now()};
@@ -1475,8 +1470,7 @@ function tapRelease(channel,x,y,inverse=false){
 }
 function canvasActivity(){canvasInteraction({kind:'activity'});}
 function insideCanvas(x,y){const r=canvas.getBoundingClientRect();return x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;}
-function clearTwoCandidate(){clearTimeout(gesture.twoTimer);gesture.twoTimer=null;gesture.twoTap=null;}
-function cancelGestures(){clearTap();gesture.drag=null;gesture.mouseZoom=null;gesture.t1d=null;gesture.sequence=null;clearTwoCandidate();canvas.style.cursor='grab';canvasActivity();}
+function cancelGestures(){clearTap();gesture.drag=null;gesture.mouseZoom=null;gesture.t1d=null;gesture.sequence=null;canvas.style.cursor='grab';canvasActivity();}
 const kbLift={h:0,targetH:0,animId:null,btnH:0,btnTarget:0,btnAnimId:null};
 const uiState={userTouchedCanvas:false,colorSeed:0};
 let chromeOcclusion=null;
@@ -1686,7 +1680,8 @@ function setSearchQuery(query){
 function measurePhotos(node, block) {
   if (!node.photos?.length) return;
   const ink = inkMetrics('H', node.baseFs, node.fw);
-  const height = 6 * (ink.ascent + ink.descent) * Math.min(4, node.mapSize ?? 1);
+  const depthMultiplier = 3 * Math.max(1, node.depth);
+  const height = depthMultiplier * (ink.ascent + ink.descent) * Math.min(4, node.mapSize ?? 1);
   // Anchor to ordinary title ink and retain the center used by layout clearance.
   const gap = height / 12, y = node.fs * C.BASELINE_FRAC - ink.ascent;
   node.capFrac = (y + height / 2) / node.fs;
@@ -1784,17 +1779,33 @@ function redraw(){draw();}
 /* ══ ZOOM & PAN ══ */
 function markTouched(){const latest=liveInsets;cancelLiveViewport();uiState.userTouchedCanvas=true;if(latest)applyViewportInsets(latest,{duration:0});cancelAnimationFrame(_raf);_raf=null;cancelAnimationFrame(kbLift.animId);kbLift.animId=null;}
 const zoomFactor=()=>Math.max(2.5,layoutPreferences.branchScale);
-function zoomAt(cx,cy,f=zoomFactor()){
-  const ns=st.scale*f;
-  const tx=cx-(cx-st.panX)*(ns/st.scale),ty=cy-(cy-st.panY)*(ns/st.scale);
-  const s0=st.scale,x0=st.panX,y0=st.panY,t0=performance.now();
-  cancelAnimationFrame(_raf);
-  function step(now){
-    const p=Math.min(1,(now-t0)/C.ANIM_ZOOM),e=easeOut3(p);
-    st.scale=s0+(ns-s0)*e;st.panX=x0+(tx-x0)*e;st.panY=y0+(ty-y0)*e;
-    redraw();if(p<1)_raf=requestAnimationFrame(step);
+// Use the same run and photo geometry and paint order as drawLbls.
+function mapHit(clientX,clientY,radius){
+  if(!st.lay||pendingRender||rtimer!==null||paused||holdDrawing)return null;
+  const rect=canvas.getBoundingClientRect();
+  const x=(clientX-rect.left-st.panX)/st.scale,y=(clientY-rect.top-st.panY)/st.scale;
+  let nearest=null,limit=(radius/st.scale)**2;
+  function consider(node,left,top,right,bottom,photoId){
+    const dx=Math.max(left-x,0,x-right),dy=Math.max(top-y,0,y-bottom);
+    const distance=dx*dx+dy*dy;
+    if(distance<=limit){limit=distance;nearest={nodeId:node.outlineId,photoId};}
   }
-  markTouched();_raf=requestAnimationFrame(step);
+  function visit(node){
+    if(Number.isSafeInteger(node.outlineId)&&node.kind!=='spacer'){
+      for(const run of node.textBlock.runs){
+        if(!run.text.trim())continue;
+        const origin=node.x+run.x,baseline=node.y+run.baseline;
+        consider(node,origin-run.left,baseline-run.ascent,origin+run.right,baseline+run.descent);
+      }
+      for(const box of node.textBlock.photos||[]){
+        const left=node.x+box.x,top=node.y+box.y;
+        consider(node,left,top,left+box.w,top+box.h,box.photo.id);
+      }
+    }
+    node.children.forEach(visit);
+  }
+  visit(st.lay.root);
+  return nearest;
 }
 listen(canvas,'wheel',e=>{
   e.preventDefault();clearTap();canvasActivity();markTouched();
@@ -1856,38 +1867,23 @@ function applyPinch(touches){
   st.panX=m.x-(m.x-st.panX)*(ns/st.scale);st.panY=m.y-(m.y-st.panY)*(ns/st.scale);
   st.scale=ns;gesture.t1d=nd;
 }
-function promotePinch(touches){clearTap();clearTwoCandidate();if(gesture.sequence)gesture.sequence.established=true;applyPinch(touches);}
-function trackTwo(touches){
-  const tap=gesture.twoTap;if(!tap)return false;
-  for(const t of touches){const original=tap.points.get(t.identifier);if(!original)return false;tap.latest.set(t.identifier,{identifier:t.identifier,clientX:t.clientX,clientY:t.clientY});if(Math.hypot(t.clientX-original.clientX,t.clientY-original.clientY)>6)return false;}
-  const points=[...tap.latest.values()],mid=tm(points);
-  return Math.hypot(mid.x-tap.mid.x,mid.y-tap.mid.y)<=6&&Math.abs(td(points)-tap.distance)<=6;
-}
 listen(canvas,'touchstart',e=>{
   e.preventDefault();if(paused)return;canvasActivity();gesture.suppressMouseUntil=performance.now()+800;
   const now=performance.now();
-  if(!gesture.sequence&&e.touches.length>=2)gesture.sequence={time:now,multi:true,established:false};
+  if(!gesture.sequence&&e.touches.length>=2)gesture.sequence={time:now,multi:true};
   if(e.touches.length===1&&!gesture.sequence){
-    const t=e.touches[0];tapPress('one-touch',t.clientX,t.clientY,40);gesture.sequence={time:now,multi:false,established:false,firstId:t.identifier};
+    const t=e.touches[0];tapPress('one-touch',t.clientX,t.clientY,40);gesture.sequence={time:now,multi:false};
     gesture.drag={sx:t.clientX-st.panX,sy:t.clientY-st.panY};gesture.startX=t.clientX;gesture.startY=t.clientY;gesture.touchMoved=false;gesture.t1d=null;
-  }else if(e.touches.length===2){
-    const seq=gesture.sequence;gesture.drag=null;gesture.touchMoved=true;gesture.t1d=td(e.touches);
-    if(seq)seq.multi=true;
-    if(ipadSafari&&seq&&!seq.established&&now-seq.time<=100){
-      clearTwoCandidate();const points=Array.from(e.touches,t=>({identifier:t.identifier,clientX:t.clientX,clientY:t.clientY}));
-      const origins=points.map(t=>t.identifier===seq.firstId?{...t,clientX:gesture.startX,clientY:gesture.startY}:t);
-      const pairMid=tm(e.touches),rect=canvas.getBoundingClientRect();tapPress('two-touch',pairMid.x+rect.left,pairMid.y+rect.top,40);
-      gesture.twoTap={points:new Map(origins.map(t=>[t.identifier,t])),latest:new Map(points.map(t=>[t.identifier,t])),mid:tm(e.touches),distance:td(e.touches),released:new Set()};
-      gesture.twoTimer=setTimeout(()=>{gesture.twoTimer=null;if(gesture.twoTap){const touches=[...gesture.twoTap.latest.values()].filter(t=>!gesture.twoTap.released.has(t.identifier));promotePinch(touches);redraw();}},Math.max(0,251-(now-seq.time)));
-    }else{clearTap();clearTwoCandidate();if(seq)seq.established=true;}
-  }else if(e.touches.length>2){clearTap();clearTwoCandidate();gesture.drag=null;gesture.t1d=null;if(gesture.sequence){gesture.sequence.multi=true;gesture.sequence.established=true;}}
+  }else if(e.touches.length>=2){
+    clearTap();gesture.sequence.multi=true;gesture.drag=null;
+    gesture.t1d=e.touches.length===2?td(e.touches):null;
+  }
 },{passive:false});
 listen(canvas,'touchmove',e=>{
   e.preventDefault();if(paused)return;canvasActivity();
-  if(gesture.twoTap){if(trackTwo(e.touches)&&performance.now()-gesture.sequence.time<=250)return;promotePinch(e.touches);}
-  else if(e.touches.length===1&&gesture.drag&&!gesture.sequence?.multi){
+  if(e.touches.length===1&&gesture.drag&&!gesture.sequence?.multi){
     const dx=e.touches[0].clientX-gesture.startX,dy=e.touches[0].clientY-gesture.startY;
-    if(!gesture.touchMoved&&Math.hypot(dx,dy)>3){gesture.touchMoved=true;clearTap();gesture.sequence.established=true;markTouched();}
+    if(!gesture.touchMoved&&Math.hypot(dx,dy)>3){gesture.touchMoved=true;clearTap();markTouched();}
     st.panX=e.touches[0].clientX-gesture.drag.sx;st.panY=e.touches[0].clientY-gesture.drag.sy;
   }else if(e.touches.length===2&&gesture.t1d!==null)applyPinch(e.touches);
   redraw();
@@ -1895,15 +1891,6 @@ listen(canvas,'touchmove',e=>{
 listen(canvas,'touchend',e=>{
   gesture.suppressMouseUntil=performance.now()+800;
   const seq=gesture.sequence;if(!seq)return;
-  if(gesture.twoTap){
-    const valid=trackTwo([...e.touches,...e.changedTouches]),tap=gesture.twoTap;
-    for(const t of e.changedTouches)tap.released.add(t.identifier);
-    if(!valid||performance.now()-seq.time>250){clearTap();clearTwoCandidate();}
-    else if(e.touches.length===0&&tap.released.size===2){
-      const mid=tm([...tap.latest.values()]),r=canvas.getBoundingClientRect();tapRelease('two-touch',mid.x+r.left,mid.y+r.top,true);
-      clearTwoCandidate();
-    }
-  }
   if(e.touches.length)return;
   if(!seq.multi&&!gesture.touchMoved&&performance.now()-seq.time<=250&&e.changedTouches.length===1&&Math.hypot(e.changedTouches[0].clientX-gesture.startX,e.changedTouches[0].clientY-gesture.startY)<=3&&insideCanvas(e.changedTouches[0].clientX,e.changedTouches[0].clientY)){
     const t=e.changedTouches[0],tx=t.clientX,ty=t.clientY;
@@ -1946,6 +1933,13 @@ function setText(text,options={}){
   text=String(text??'');
   let metadataCount=null;
   function countMetadataNodes(){return metadataCount??(metadataCount=text.split('\n').filter(line=>line.trim().replace(/^[-*•]\s+/,'').trim()).length);}
+  let nodeIds=null;
+  if(options && 'nodeIds' in options){
+    const ids=options.nodeIds;
+    if(!Array.isArray(ids)||ids.length!==countMetadataNodes()||!Array.from(ids).every(Number.isSafeInteger)||new Set(ids).size!==ids.length)
+      throw new TypeError('Invalid outline node IDs');
+    nodeIds=ids.slice();
+  }
   let nodeTexts=null;
   if(options&&'nodeTexts' in options){
     const values=options.nodeTexts,count=countMetadataNodes();
@@ -1985,10 +1979,10 @@ function setText(text,options={}){
     if(!Array.isArray(values)||values.length!==count||Array.from(values).some((v,i)=>typeof v!=='boolean'||presentation?.[i].kind==='spacer'&&v)){const error=new TypeError('Invalid canonical child-presence metadata');reportError(error);throw error;}
     hasChildren=values.slice();
   }
-  const onlyPresentation=text===sourceText&&JSON.stringify(titleLines)===JSON.stringify(sourceTitleLines)&&JSON.stringify(hasChildren)===JSON.stringify(sourceHasChildren)&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats)&&placeholders.join(',')===sourcePlaceholders.join(',');
+  const onlyPresentation=JSON.stringify(nodeIds)===JSON.stringify(sourceNodeIds)&&text===sourceText&&JSON.stringify(titleLines)===JSON.stringify(sourceTitleLines)&&JSON.stringify(hasChildren)===JSON.stringify(sourceHasChildren)&&JSON.stringify(nodeTexts)===JSON.stringify(sourceNodeTexts)&&JSON.stringify(stats)===JSON.stringify(sourceStats)&&placeholders.join(',')===sourcePlaceholders.join(',');
   if(onlyPresentation&&JSON.stringify(presentation)===JSON.stringify(sourcePresentation))return;
   if(!onlyPresentation)sourceRevision++;presentationChanged=presentationChanged||onlyPresentation;sourceStats=stats;sourcePresentation=presentation;sourceHasChildren=hasChildren;sourceReady=true;
-  sourceTitleLines=titleLines;sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;
+  sourceNodeIds=nodeIds;sourceTitleLines=titleLines;sourceText=text;sourcePlaceholders=placeholders;sourceNodeTexts=nodeTexts;
   if(!text.trim())flushRender();else if(onlyPresentation){pendingRender=true;if(!paused&&rtimer===null)rtimer=setTimeout(()=>{rtimer=null;render();},Math.max(0,50-(performance.now()-lastPresentationRender)));}else schedRender();
 }
 function getSettingBounds(){return layoutPreferences.getSettingBounds();}
@@ -2116,5 +2110,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.18.0',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1'],mount};
+window.MindMap={version:'1.19.2',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
 })();

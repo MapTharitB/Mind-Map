@@ -1,4 +1,4 @@
-/* Outliner version 1.21.3 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.22.12 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -424,6 +424,7 @@ function clearSpacerKind(node){
   if(node.kind!=='spacer')return false;
   delete node.kind;return true;
 }
+// Saved and portable data may have legacy photo parents; separatePhotoText repairs them before use.
 function validPresentation(node){
   return validTitleLines(node)
     && (node.photos === undefined || node.kind !== "spacer" && validPhotos(node.photos))
@@ -522,7 +523,10 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
    DO NOT go back to per-row top/bottom box-shadows: the rounded row corners made the line look bent and neighbouring rows flashed. */
 .moa-outliner .row.dragging{opacity:.4}
 .moa-outliner .dropline{position:fixed;display:none;height:2px;background:var(--accent);pointer-events:none;z-index:15}
-.moa-outliner .row.drop-in{background:var(--halo);box-shadow:inset 0 0 0 1px var(--accent)}
+.moa-outliner .row.drop-in,.moa-outliner .map-reveal-flash{background:var(--halo);box-shadow:inset 0 0 0 1px var(--accent)}
+.moa-outliner .map-reveal-flash{position:absolute;inset:0;border-radius:inherit;pointer-events:none}
+.moa-outliner .head:has(>.map-reveal-flash){position:relative;border-radius:6px}
+.moa-outliner :is(.row,.head,.photo-row):has(>.map-reveal-flash){isolation:isolate}
 .moa-outliner .dots{position:absolute;left:-47px;top:0;width:21px;height:var(--bh);display:flex;align-items:center;justify-content:center;background:none;border:0;color:var(--mute);cursor:pointer;padding:0;opacity:0}
 .moa-outliner .dots>span{flex:none;width:24px;aspect-ratio:1;display:grid;place-items:center;border-radius:50%;pointer-events:none}
 .moa-outliner .dots>span::before{
@@ -603,16 +607,18 @@ const presentationCSS=String.raw`
 .moa-outliner .row>.tw,.moa-outliner .head>.tw{min-width:42px}
 .moa-outliner .tw.map-size-active{--map-size-reserve:58px}
 .moa-outliner .tw.map-child-row-active{--map-child-row-width:24px;--map-child-row-reserve:calc(var(--map-child-row-width) + 4px)}
-.moa-outliner .tw.map-presentation-active{--map-badge-reserve:calc(var(--map-size-reserve,0px) + var(--map-child-row-reserve,0px))}
+.moa-outliner .tw.map-presentation-active{--map-badge-inset:3px;--map-badge-reserve:calc(var(--map-badge-inset) + var(--map-size-reserve,0px) + var(--map-child-row-reserve,0px))}
 .moa-outliner .row>.tw.map-presentation-active,.moa-outliner .head>.tw.map-presentation-active{padding-right:var(--map-badge-reserve);min-width:calc(42px + var(--map-badge-reserve))}
 .moa-outliner .tw.map-presentation-active>.hl{right:var(--map-badge-reserve)}
-.moa-outliner .tw.map-child-row-active>.description-field{margin-right:calc(-1 * var(--map-child-row-reserve))}
-.moa-outliner .map-size-badge,.moa-outliner .map-child-row-badge{position:absolute;top:3px;min-height:24px;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);pointer-events:none}
-.moa-outliner .map-size-badge{pointer-events:auto;cursor:pointer;z-index:1;padding:0;right:0;width:54px;text-align:center;font:12px/22px 'Cascadia Code',monospace}
-.moa-outliner .map-child-row-badge{right:var(--map-size-reserve,0px);width:var(--map-child-row-width);display:grid;place-items:center}
+.moa-outliner .tw.map-presentation-active>.description-field{margin-right:calc(0px - var(--map-badge-inset) - var(--map-child-row-reserve,0px))}
+.moa-outliner .map-size-badge,.moa-outliner .map-child-row-badge{position:absolute;top:var(--map-badge-inset);right:var(--map-badge-inset);min-height:24px;border:1px solid var(--line);border-radius:5px;background:var(--btn);color:var(--accent);pointer-events:none}
+.moa-outliner .map-size-badge{pointer-events:auto;cursor:pointer;z-index:1;padding:0;width:54px;text-align:center;font:12px/22px 'Cascadia Code',monospace}
+.moa-outliner .map-child-row-badge{right:calc(var(--map-badge-inset) + var(--map-size-reserve,0px));width:var(--map-child-row-width);display:grid;place-items:center}
 .moa-outliner .map-size-badge[hidden],.moa-outliner .map-child-row-badge[hidden]{display:none}
-.moa-outliner .tw.map-presentation-active::before{content:"";position:absolute;left:-22px;right:0;top:0;height:max(var(--bh),var(--map-size-title-height,0px));border-radius:6px;background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
-.moa-outliner .head>.tw.map-presentation-active::before{left:0}
+.moa-outliner .tw.map-presentation-active::before,.moa-outliner .tw.photo-row>.map-reveal-flash{left:-22px;right:0;top:0;border-radius:6px}
+.moa-outliner .tw.map-presentation-active::before{content:"";position:absolute;height:max(var(--bh),var(--map-size-title-height,0px));background:color-mix(in srgb,var(--bg),var(--ink) 6%);pointer-events:none}
+.moa-outliner .head>.tw.map-presentation-active::before,.moa-outliner .head>.tw.photo-row>.map-reveal-flash{left:0}
+.moa-outliner :is(.row,.head):has(>.map-reveal-flash)>.tw.map-presentation-active::before,.moa-outliner .tw.photo-row.map-presentation-active:has(>.map-reveal-flash)::before{z-index:-1}
 .moa-outliner .row.sel>.tw.map-presentation-active::before,.moa-outliner .row.drop-in>.tw.map-presentation-active::before{display:none}
 .moa-outliner .spacer-editor>textarea::placeholder{color:var(--mute);font-style:italic}
 .moa-outliner #ol-menu{width:238px;min-width:0;max-width:calc(100vw - 16px)}
@@ -621,7 +627,7 @@ const presentationCSS=String.raw`
 .moa-outliner .size-label{display:block;padding:5px 6px;color:var(--mute);font-size:12px}
 .moa-outliner .size-scope{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;font-size:12px;cursor:pointer}
 .moa-outliner #ol-menu.size-only > :not(.size-header):not(.size-controls):not(.size-scope),.moa-outliner .size-scope[hidden]{display:none}
-.moa-outliner .tw.photo-row.map-presentation-active::before{height:auto;bottom:0}
+.moa-outliner .tw.photo-row.map-presentation-active::before,.moa-outliner .tw.photo-row>.map-reveal-flash{height:auto;bottom:0}
 .moa-outliner .size-scope input{margin:0}
 .moa-outliner .size-controls{display:flex;gap:8px;align-items:center;margin:0 8px}
 .moa-outliner #ol-menu .size-stepper{display:flex;height:40px;border:1px solid var(--line);border-radius:6px;background:var(--btn);flex:1;min-width:0;overflow:hidden}
@@ -965,6 +971,7 @@ function ownsEvent(e, historyShortcut = false) {
 }
 function destroy() {
   if (destroyed) return;
+  clearRevealHighlight();
   cancelPhotoSort(); cleanupViewer(); removePhotoPreviews(container); photoObserver.disconnect(); photoService.close();
   depthController?.dispose();endAdjustment();numericBindings.forEach(b=>b.dispose());numericSelection.dispose();cancelTouch('destroy'); destroyed = true; lastOwnedInteraction = historyShortcutOwned = false;
   historyHost = null; hist.length = 0; typingSnapshot = null; historyBusy = historyPreparing = historyComposing = false;
@@ -1234,6 +1241,12 @@ function realChildren(node) {
   const children = node.children;
   return node === phOwner && children.length === 1 && children[0] === phNode && !phNode.text && !phNode.children.length ? [] : children;
 }
+// A transient typing row is only a placeholder until its owner gains real content.
+function discardUnusedPlaceholder(owner) {
+  if (phOwner !== owner || realChildren(owner).length) return;
+  owner.children.length = 0;
+  phNode = phOwner = null;
+}
 function canMarkSpacer(node) {
   return node.kind !== 'spacer' && !node.photos && !realChildren(node).length && !node.text.includes('\n') && /^[\s\u200b]*$/u.test(node.text);
 }
@@ -1246,7 +1259,7 @@ function openPlaceholderOwner(node) {
 }
 const snap = (includeFocus = true) => JSON.stringify({ root, zoom: zoom.id,
   ...(includeFocus && focusVisits.length ? {focusViews:snapshotFocusViews()} : {}) }, (k, v) => k === 'children' && phNode && v.length === 1 && v[0] === phNode && !phNode.text ? [] : v);
-// History strings include visit state. Persisted outline strings retain the canonical shape.
+// History snapshots include visit state. Optional row IDs belong to the history entry only.
 const outlineValue = entry => typeof entry === 'string' ? entry : entry?.outline;
 function outlineHistoryIndex(i = hi) { while (i >= 0 && !outlineValue(hist[i])) i--; return i; }
 function historyRootEqual(a, b) { return !!b && JSON.stringify(JSON.parse(a).root) === JSON.stringify(JSON.parse(b).root); }
@@ -1254,7 +1267,7 @@ function appendHistory(entry) {
   hist.length = hi + 1; hist.push(entry);
   if (hist.length > 300) {
     const baseline = hist[0]; hist.shift();
-    if (typeof hist[0] !== 'string') hist[0] = outlineValue(hist[0]) || baseline;
+    if (historyHost && typeof hist[0] !== 'string') hist[0] = outlineValue(hist[0]) || baseline;
   }
   hi = hist.length - 1;
 }
@@ -1278,28 +1291,26 @@ function appendAdjustment(entry,kind){
   if(hi!==a.index){endAdjustment();return false;}
   appendHistory(entry);a.index=hi;a.edge=entry;return true;
 }
-function record(x = snap(), settleTyping = false) {
+function record(x = snap(), settleTyping = false, scrollNodeId = null) {
   if(adjustment&&!adjustment.writing)endAdjustment();
   const pending = tm && typingSnapshot; clearTimeout(tm); tm = null; typingSnapshot = null;
   // Owner V1.1 exception: a changed zoom is an outline history step, even with identical text.
-  if (historyHost) {
-    if (x === outlineValue(hist[outlineHistoryIndex()])) return;
-    let focus = null;
-    if ((!historyBusy || settleTyping) && typeof historyHost.reconcileFocus === 'function') {
-      try {
-        const d = JSON.parse(x), edge = historyHost.reconcileFocus({zoomId:d.zoom===d.root.id?null:d.zoom,tree:d.root.children});
-        if (edge) {
-          const before = detachedHostValue(edge.before), after = detachedHostValue(edge.after);
-          // Only a compound pin removal needs the last typing snapshot here.
-          // Enter and explicit host actions already close typing before mutation.
-          if (pending && pending !== x) record(pending);
-          if (historyCallback('apply', after)) focus = {before,after};
-        }
-      } catch (_) { toast('History action could not complete'); }
-    }
-    const entry=focus ? {outline:x,focus} : x;if(!appendAdjustment(entry,'outline'))appendHistory(entry); return;
+  if (x === outlineValue(hist[outlineHistoryIndex()])) return;
+  let focus = null;
+  if (historyHost && (!historyBusy || settleTyping) && typeof historyHost.reconcileFocus === 'function') {
+    try {
+      const d = JSON.parse(x), edge = historyHost.reconcileFocus({zoomId:d.zoom===d.root.id?null:d.zoom,tree:d.root.children});
+      if (edge) {
+        const before = detachedHostValue(edge.before), after = detachedHostValue(edge.after);
+        // Only a compound pin removal needs the last typing snapshot here.
+        // Enter and explicit host actions already close typing before mutation.
+        if (pending && pending !== x) record(pending);
+        if (historyCallback('apply', after)) focus = {before,after};
+      }
+    } catch (_) { toast('History action could not complete'); }
   }
-  if (x === hist[hi]) return; if(appendAdjustment(x,'outline'))return; hist.length = hi + 1; hist.push(x); if (hist.length > 300) hist.shift(); hi = hist.length - 1;
+  const entry = focus || scrollNodeId !== null ? {outline:x, focus, scrollNodeId} : x;
+  if (!appendAdjustment(entry, 'outline')) appendHistory(entry);
 }
 function detachedHostValue(value) {
   const text = JSON.stringify(value);
@@ -1350,7 +1361,7 @@ function runHistory(direction) {
     const edge = hist[direction === 'undo' ? hi : next];
     if (outlineValue(edge)) {
       if (edge.focus && !historyCallback('apply', detachedHostValue(edge.focus[direction === 'undo' ? 'before' : 'after']))) return false;
-      hi = next; restore(outlineHistoryIndex());
+      hi = next; restore(outlineHistoryIndex(), edge.scrollNodeId);
     }
     else { if (!historyCallback('apply', detachedHostValue(edge[direction === 'undo' ? 'before' : 'after'])) || destroyed) return false; hi = next; }
     return true;
@@ -1372,16 +1383,17 @@ function flushSave() {
     reportSaveFailure();
   }
 }
-function save(typing) {
+function save(typing, scrollNodeId) {
   if (zoom !== root && headControls) updateChevron(headControls.arrow, zoom);
   depthController?.reconcile();
   if(adjustment?.writing){if(!adjustmentSaveTimer)adjustmentSaveTimer=setTimeout(()=>{adjustmentSaveTimer=null;flushSave();},50);}else flushSave();
-  if (typing) { typingSnapshot = snap(); clearTimeout(tm); tm = setTimeout(record, 500); } else record();
+  if (typing) { typingSnapshot = snap(); clearTimeout(tm); tm = setTimeout(record, 500); } else record(undefined, false, scrollNodeId);
   schedulePublication();
 }
-function restore(i) {
+function restore(i, scrollNodeId) {
   const value = outlineValue(hist[i]), d = JSON.parse(value);
   const viewOnly = d.zoom !== zoom.id && historyRootEqual(snap(), value);
+  const scrollNode = d.zoom === zoom.id && scrollNodeId != null ? find(root, scrollNodeId) : null;
   if (viewOnly) blurOutlineText();
   // Search state is keyed by node objects, and undo/redo rebuilds every node: carry it over by id so bullets typed during a search stay visible.
   const keepIds = [...sKeep].map(n => n.id), overIds = [...sOver].map(([n, v]) => [n.id, v]);
@@ -1390,11 +1402,13 @@ function restore(i) {
   for (const {id, expansion} of d.focusViews ?? []) focusVisits.push({id, expansion:new Map(expansion)});
   sKeep.clear(); keepIds.forEach(id => { const n = find(root, id); if (n) sKeep.add(n); });
   sOver.clear(); overIds.forEach(([id, v]) => { const n = find(root, id); if (n) sOver.set(n, v); });
-  const a = viewOnly || ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement(); render(a && a.dataset && a.dataset.id ? +a.dataset.id : null);
+  const a = viewOnly || ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement();
+  const focusId = a?.dataset?.id ? +a.dataset.id : null;
+  if (scrollNode) renderKeepingNodePosition(scrollNode, focusId, null); else render(focusId);
   reconcilePresentationMenu();
 }
-function undo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi > 0) restore(--hi); }
-function redo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi < hist.length - 1) restore(++hi); }
+function undo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi > 0) { const entry = hist[hi]; restore(--hi, entry.scrollNodeId); } }
+function redo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi < hist.length - 1) restore(++hi, hist[hi].scrollNodeId); }
 
 // Parser for the seed text and for pasted text (pre-existing behaviour): indented lines, optional bullet markers, also WorkFlowy exports. Multi-line paste rebuilds the tree.
 function parseOutline(text) {
@@ -1691,7 +1705,7 @@ function bindNodeEditor(host, n, head = false, title = null) {
 }
 
 // Redraws everything. DO NOT add automatic caret restoration here (rejected). Callers pass focusId when they want a bullet focused.
-function render(focusId, pos) {
+function render(focusId, pos, scrollNodeId) {
   const nodes = zoom !== root || focusVisits.length ? new Map() : null;
   par = new Map(); buildPar(root, nodes);
   if (nodes) reconcileFocusVisits(nodes);
@@ -1712,7 +1726,7 @@ function render(focusId, pos) {
   children.forEach(c => tree.appendChild(row(c, false, 0)));
   if (searching() && !sShown.size) { const m = el('div', 'nomatch'); m.textContent = 'No matches'; tree.appendChild(m); }
   tree.querySelectorAll('textarea').forEach(fit);
-  crumbs(); head(); save();
+  crumbs(); head(); save(false, scrollNodeId);
   if (focusId) focusNode(focusId, pos);
 }
 // Big title for the bullet you zoomed into (hidden at Home). It edits that bullet's text.
@@ -1758,6 +1772,67 @@ function navigate(n) {
   // Search-only toggles belong to the view where they were made.
   sOver.clear();
   render();
+}
+let revealHighlight = null;
+function clearRevealHighlight() {
+  if (!revealHighlight) return;
+  revealHighlight.effect.target.remove();
+  revealHighlight.cancel();
+  revealHighlight = null;
+}
+// Reveal through the nearest enclosing Focus, keeping its expansion visit local.
+function revealNode(id, photoId) {
+  if (destroyed || historyComposing || !Number.isSafeInteger(id)) return false;
+  const node = find(root, id);
+  const photoIndex = photoId === undefined ? -1 : node?.photos?.findIndex(photo => photo.id === photoId) ?? -1;
+  if (!node || node === root || node.kind === 'spacer' ||
+      (photoId !== undefined && photoIndex < 0)) return false;
+  const path = new Set();
+  for (let item = node; item; item = par.get(item)) path.add(item);
+  let scope = zoom;
+  while (!path.has(scope)) scope = par.get(scope);
+  const moved = scope !== zoom;
+  if (moved) {
+    blurOutlineText(); record(); depthController?.invalidate();
+    enterFocus(scope); zoom = scope; sOver.clear();
+    if (searching()) computeSets();
+  }
+  let changed = moved;
+  const steps = [];
+  for (let child = node; child !== scope; child = par.get(child)) steps.push(child);
+  const filtered = searching() && steps.some(child => {
+    const parent = par.get(child);
+    return !sShown.has(child) && !(parent !== zoom && sOver.get(parent) === true);
+  });
+  if (filtered) endSearch(false);
+  for (const child of steps) {
+    const parent = par.get(child);
+    if ((parent !== root || searching()) && !isOpen(parent)) {
+      if (!changed) record();
+      setNodeOpen(parent, true); changed = true;
+    }
+  }
+  if (changed || filtered) render();
+  const row = node === zoom ? headEl : els.get(node);
+  const target = photoId === undefined ? row :
+    row?.querySelectorAll('.photo-thumb')[photoIndex];
+  if (!target) return false;
+  requestAnimationFrame(() => {
+    if (!target.isConnected || destroyed) return;
+    target.scrollIntoView({block:'center', inline:'nearest', behavior:'instant'});
+    clearRevealHighlight();
+    const marker = el('span', 'map-reveal-flash');
+    marker.setAttribute('aria-hidden', 'true');
+    const highlightHost = photoId === undefined ? row : target.closest('.photo-row');
+    highlightHost.prepend(marker);
+    const highlight = revealHighlight = marker.animate([
+      {opacity:1, offset:0},
+      {opacity:1, offset:1/6},
+      {opacity:0, offset:1}
+    ], {duration:600, id:'map-reveal-highlight'});
+    highlight.onfinish = () => { if (revealHighlight === highlight) clearRevealHighlight(); };
+  });
+  return true;
 }
 // REQUIREMENT (breadcrumb abbreviation), in this order:
 // 1. Everything fits: show the full path.
@@ -1810,18 +1885,22 @@ function updateChevron(arrow, node) {
   if (hasChildren) arrow.setAttribute('aria-expanded', String(open));
   else arrow.removeAttribute('aria-expanded');
 }
-// Safari can reset the sheet's scroll offset while render rebuilds its rows.
-function renderBranchToggle(node) {
-  if (!ipadSafari || !treeEl.scrollTop) { render(); return; }
+// Rebuilding the sheet can reset its offset or move the browser's scroll anchor.
+function renderKeepingNodePosition(node, focusId, scrollNodeId = node.id) {
   const previousScroll = treeEl.scrollTop;
   const previousTop = els.get(node)?.getBoundingClientRect().top;
-  render();
-  const currentTop = els.get(node)?.getBoundingClientRect().top;
+  render(focusId, undefined, scrollNodeId);
+  // History restores new node objects with the same IDs.
+  const currentRow = els.get(node) ?? els.get(find(root, node.id));
+  const currentTop = currentRow?.getBoundingClientRect().top;
   if (previousTop === undefined || currentTop === undefined) {
     treeEl.scrollTop = previousScroll;
   } else if (currentTop !== previousTop) {
     treeEl.scrollTop += currentTop - previousTop;
   }
+}
+function renderBranchToggle(node) {
+  renderKeepingNodePosition(node);
 }
 function createNodeControls(getNode, focused = false) {
   const arrow = el('button', 'arrow'), more = el('button', 'dots');
@@ -2031,7 +2110,7 @@ function syncPresentationMenu(){
   container.querySelector('#ol-size-down').disabled=value<=MIN_MAP_SIZE;container.querySelector('#ol-size-up').disabled=value>=MAX_MAP_SIZE;
   menu.querySelector('[data-a="description"]').hidden=!!menuNode.photos||menuNode.kind==='spacer'||splitNodeText(menuNode.text,menuNode.titleLineCount).hasDescription;
   menu.querySelector('[data-a="removeSpacer"]').hidden=menuNode.kind!=='spacer';
-  menu.querySelector('[data-a="spacer"]').textContent=canMarkSpacer(menuNode)?'Mark as Spacer':'Insert Spacer Below';
+  menu.querySelector('[data-a="spacer"]').textContent=canMarkSpacer(menuNode)?'Mark as Spacer':'Insert Spacer';
 }
 // History replaces node objects. Rebind only menu state; never replay a stale numeric draft.
 function reconcilePresentationMenu(){
@@ -2102,7 +2181,7 @@ function presentationCommand(action,n=menuNode,value,reset=false){
     delete spacer.childrenInRow;
     spacer.kind='spacer';if(searching())sKeep.add(spacer);
   }
-  menu.classList.remove('show');render();return true;
+  menu.classList.remove('show');renderKeepingNodePosition(n);return true;
 }
 function commitSize(){
   if(sizeComposing||historyComposing)return false;
@@ -2145,7 +2224,7 @@ function syncMenuActions(){
   const n=menuNode;
   const photoAction = menu.querySelector('[data-a="addPhoto"]'), placement = photoPlacement(n);
   photoAction.hidden = !placement;
-  photoAction.textContent = placement === 'below' ? 'Insert Photo Below' : 'Add Photo';
+  photoAction.textContent = placement === 'below' ? 'Insert Photo' : 'Add Photo';
   const importHidden = !canImportInto(n);
   menu.querySelector('[data-a="importFile"]').hidden = importHidden;
   menu.querySelector('[data-group="import"]').hidden = importHidden;
@@ -2269,10 +2348,11 @@ function insertItems(items, target, replaceEmpty) {
   if (searching()) { sKeep.add(target); items.forEach(i => sKeep.add(i)); }
   sel.clear(); render(last.photos ? null : last.id);
 }
-// Older documents allowed captions on the same node. Keep their text and children.
+// Photo nodes are childless and contain only photos. On load, ZIP import and rich paste,
+// keep legacy text and children on their original branch and move the photos to a new first child.
 function separatePhotoText(node) {
   for (const child of node.children) separatePhotoText(child);
-  if (!node.photos || !node.text) return;
+  if (!node.photos || (!node.text && !node.children.length)) return;
   const child = mk();
   child.photos = node.photos;
   if (node.mapSize !== undefined) child.mapSize = node.mapSize;
@@ -2384,12 +2464,7 @@ listen(outlineFileInput, 'change', async () => {
     if (historyComposing || target && !canImportInto(target)) { toast('The import target is no longer available'); return; }
   }
   record();
-  const destination = target ?? root;
-  // A transient typing row is only a placeholder until its owner gains real content.
-  if (phOwner === destination && !realChildren(destination).length) {
-    destination.children.length = 0;
-    phNode = phOwner = null;
-  }
+  discardUnusedPlaceholder(target ?? root);
   placeItems(items, target, !!target);
   if (zip && target) writeViewOpen(target, items[0].open);
   if (target && searching()) {
@@ -2943,11 +3018,11 @@ function startSearch(v) {
   sq = v; sOver.clear(); sKeep.clear(); sel.clear(); qBox.classList.add('on'); qIn.blur(); syncSearchAction(); render();
   if(changed)emit('search',{query:sq});
 }
-function endSearch() {
+function endSearch(redraw = true) {
   cancelSearchExit();
   const was = searching();
   sq = ''; sShown.clear(); sAnc.clear(); sOver.clear(); sKeep.clear(); qIn.value = ''; qBox.classList.remove('on'); syncSearchAction();
-  if (was) { sel.clear(); render(); emit('search',{query:sq}); }
+  if (was) { sel.clear(); if (redraw) render(); emit('search',{query:sq}); }
 }
 function commitSearchExit() {
   if (!searchExitPending || searchComposing || searchExitPointer !== null) return;
@@ -3403,6 +3478,7 @@ listen(photoInput, 'change', async () => {
     commitPhotoChange(node, () => {
       const row = placement === 'below' ? mk() : node;
       if (row !== node) insertAfterNodeEnd(node, row);
+      else discardUnusedPlaceholder(row); // A blank Focus title can still own a typing row.
       row.photos = [...(row.photos || []), ...prepared.map(item => item.photo)];
       if (searching()) sKeep.add(row);
     });
@@ -3534,8 +3610,8 @@ function syncPhotoRow(binding) {
           event.stopPropagation();
           if (!par.has(node) || !node.photos?.includes(photo)) return;
           commitPhotoChange(node, () => {
-            node.photos = node.photos.filter(item => item !== photo);
-            if (!node.photos.length) delete node.photos;
+            if (node.photos.length === 1) rm(node);
+            else node.photos = node.photos.filter(item => item !== photo);
           });
         });
         tile.append(button, remove); group.append(tile);
@@ -3560,7 +3636,7 @@ if (!persistRequested) {
   try { const request = navigator.storage?.persist?.(); if (request && typeof request.catch === 'function') request.catch(() => {}); } catch (_) {}
 }
 initializePublication();
-return { on, getSnapshot, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
+return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.21.3', apiVersion: 1, capabilities: ['snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.22.12', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
