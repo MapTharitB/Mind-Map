@@ -74,7 +74,9 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 #map-options .shell-button{height:40px;margin:0;padding:0 8px;width:100%;font-size:12px}
 #map-options .square-reset{width:40px;display:flex;align-items:center;justify-content:center;padding:0}
 #download-pdf{display:block}
-#download-pdf[hidden]+#settings-controls>.pdf-divider{display:none}
+#download-pdf[hidden]~#settings-controls>.pdf-divider{display:none}
+#pdf-ready{display:flex;gap:8px;margin-top:8px}
+#map-options #pdf-ready .shell-button{flex:1;width:auto;display:grid;place-items:center;text-decoration:none}
 #divider{position:absolute;top:0;bottom:0;width:var(--divider-target-width,12px);z-index:24;cursor:ew-resize;touch-action:none;outline:0}
 #divider::after{content:"";position:absolute;top:0;bottom:0;left:var(--divider-line-left,5px);width:2px;background:var(--line)}
 #divider:hover::after,#divider:focus-visible::after,.resizing #divider::after{background:var(--accent)}
@@ -86,7 +88,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
 
 /* Approved compact layout menu: all rows share label / control / checkbox columns. */
 #settings-controls:not([hidden]){--map-option-row-gap:8px;display:grid;grid-template-columns:48px minmax(0,1fr) 40px;row-gap:var(--map-option-row-gap);column-gap:12px;margin-bottom:8px}
-#download-pdf:not([hidden])+#settings-controls{padding-top:var(--map-option-row-gap)}
+#download-pdf:not([hidden])~#settings-controls{padding-top:var(--map-option-row-gap)}
 #settings-controls .option-row,#settings-controls .wrap-controls{display:contents}
 #settings-controls .option-row[hidden]{display:none}
 #settings-controls .option-label{white-space:nowrap;align-self:center}
@@ -121,6 +123,10 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "IBM Plex Sans
       <button id="map-more" class="shell-button" aria-label="Mind Map Layout" aria-expanded="false" aria-controls="map-options">⋯</button>
       <div id="map-options" hidden>
         <button id="download-pdf" class="shell-button" hidden>Download PDF</button>
+        <div id="pdf-ready" hidden>
+          <a id="save-pdf" class="shell-button">Save PDF</a>
+          <a id="open-pdf" class="shell-button" target="_blank" rel="noopener">Open PDF</a>
+        </div>
         <div id="settings-controls" hidden>
           <div class="sep pdf-divider" role="separator"></div>
           <div class="section-title scale-option" hidden>Branch Scale</div>
@@ -172,8 +178,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.22.15' },
-  mindmap: { src: './mindmap.js', v: '1.20.1' }
+  outliner: { src: './outliner.js', v: '1.22.20' },
+  mindmap: { src: './mindmap.js', v: '1.20.2' }
 };
 // BEGIN SYNC FILTER
 const effectiveMapFocus=(syncFocus,pinned,focus)=>pinned??(syncFocus?focus:null);
@@ -1028,17 +1034,56 @@ function showPdfNotice(message){
   if(outline&&window.Outliner.capabilities.includes('toast-v1')&&typeof outline.showToast==='function')outline.showToast(message);
   else report('Mind Map',message);
 }
+// iPad desktop sites also identify as Mac. A second tap gives Safari a fresh
+// gesture after the text engine, fonts and optional images have loaded.
+const appleMobilePdf=/iPad|iPhone|iPod/i.test(navigator.userAgent)||
+  navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1;
+const savePdf=$('save-pdf'),openPdf=$('open-pdf'),pdfReady=$('pdf-ready');
+let preparedPdf=null;
+function clearPreparedPdf(){
+  if(!preparedPdf)return;
+  const {url}=preparedPdf;
+  preparedPdf=null;pdfReady.hidden=true;
+  savePdf.removeAttribute('href');savePdf.removeAttribute('download');openPdf.removeAttribute('href');
+  URL.revokeObjectURL(url);
+}
+function showPreparedPdf(file){
+  const url=URL.createObjectURL(file);
+  preparedPdf={file,url,tryShare:true};
+  savePdf.href=url;savePdf.download=file.name;openPdf.href=url;
+  pdfReady.hidden=false;
+}
+savePdf.addEventListener('click',async event=>{
+  // The anchor is also a native download on origins without file sharing.
+  if(!preparedPdf?.tryShare||typeof navigator.share!=='function'||typeof navigator.canShare!=='function')return;
+  const current=preparedPdf,data={files:[current.file]};
+  try{if(!navigator.canShare(data))return;}catch{ return; }
+  event.preventDefault();
+  try{
+    const result=navigator.share(data);
+    if(!result||typeof result.then!=='function')throw new Error('File sharing is unavailable.');
+    await result;
+  }catch(error){
+    if(preparedPdf!==current||error?.name==='AbortError')return;
+    current.tryShare=false;
+    showPdfNotice('Could not open sharing. Tap Save PDF again, or open the PDF and use Share to save it.');
+  }
+});
 $('download-pdf').addEventListener('click',async event=>{
   const button=event.currentTarget,instance=map;
   if(button.disabled||!supports('pdf-export','exportPDF'))return;
   button.disabled=true;
   try{
+    clearPreparedPdf();
     // The Outliner snapshot is current before its debounced change notification.
     dirty=true;
     const sync=flushSync();
     const ready=sync&&typeof sync.then==='function'?await sync:sync;
     if(!ready||map!==instance)return;
-    if(supports('pdf-photo-export-v1','exportPDF'))await instance.exportPDF({onWarning:showPdfNotice});
+    if(appleMobilePdf&&supports('pdf-prepare-v1','exportPDF')){
+      const file=await instance.exportPDF({onWarning:showPdfNotice,prepareOnly:true});
+      if(file&&map===instance)showPreparedPdf(file);
+    }else if(supports('pdf-photo-export-v1','exportPDF'))await instance.exportPDF({onWarning:showPdfNotice});
     else await instance.exportPDF();
     if(map===instance)refreshSettings();
   }catch(error){
@@ -1137,7 +1182,7 @@ async function start() {
   } catch(error) {if(!seedHistory.enabled)seedHistory.dispose();report('Outliner',new Error('Outliner could not load; editing is unavailable or live sync could not start. '+error.message));if(!outline){mode='collapsed';layout();}}
   try {
     mapModule=await loadModule('mindmap','MindMap');map=mapModule.mount($('map-host'),{...(mapModule.capabilities.includes('photo-attachments-v1')&&typeof outline.acquirePhoto==='function'?{acquirePhoto:outline.acquirePhoto}:{}),...(mapModule.capabilities.includes('canvas-interaction-v1')?{onCanvasInteraction:canvasInteraction}:{}),onError:error=>{dirty=true;if(seedHistory.enabled)seedHistory.markDirty();report('Mind Map',error);}});
-    if(map&&typeof map.destroy==='function'){const instance=map,destroy=map.destroy;map.destroy=()=>{cancelDismissal();mapFocus.cancelFit();projectionGeneration++;if(map===instance)map=null;destroy();};}
+    if(map&&typeof map.destroy==='function'){const instance=map,destroy=map.destroy;map.destroy=()=>{cancelDismissal();mapFocus.cancelFit();projectionGeneration++;if(map===instance){clearPreparedPdf();map=null;}destroy();};}
     if(!map || !supports('text-input','setText'))throw new Error('Mind Map text-input capability/method is missing');
     const hasSettings=supports('settings-v1','getSettings')&&supports('settings-v1','setSettings'),hasPDF=supports('pdf-export','exportPDF');
     const hasSeed=hasSettings&&(!seedHistory.enabled||supports('color-seed-only','setColorSeed'));

@@ -1,4 +1,4 @@
-/* Outliner version 1.22.15 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.22.20 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -489,7 +489,7 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .ic:hover{color:var(--ink)!important;border-color:var(--line)!important}
 /* REQUIREMENT (zoom title): the zoomed-in bullet is shown as a big editable heading above its children, aligned with the bullets.
    Its font size and weight are size level 0 (49px bold, see levelStyle()) in the two hierarchy modes, plain 16px in Plain Text mode; set by head(). Its line height is the shared textarea rule. */
-/* Owner override: the Focus title uses the top-level hierarchy size. */
+/* Owner override: the Focus title uses the top-level hierarchy size, or the regular size in Plain Text. It stays bold in both styles. */
 .moa-outliner .head{flex:none;display:none;padding-block:7.5px 6.5px;padding-right:var(--text-right)}
 /* Owner override 2026-10-16 (R12-3A): balance the complete title in the first-row slot.
    The focused sheet border adds 1px below: 7.5px above = 6.5px + 1px below.
@@ -548,8 +548,8 @@ const css = String.raw`/* REQUIREMENT (full width layout): the toolbar and bread
 .moa-outliner .menu [hidden]{display:none}
 .moa-outliner .menu button:hover{background:var(--btn)}
 .moa-outliner .menu .sep{border-top:1px solid var(--line);margin:4px 0}
-.moa-outliner .home-text-style button::before{content:"";display:inline-block;width:1em}
-.moa-outliner .home-text-style button[aria-pressed="true"]::before{content:"✓" / ""}
+.moa-outliner .text-style button::before{content:"";display:inline-block;width:1em}
+.moa-outliner .text-style button[aria-pressed="true"]::before{content:"✓" / ""}
 .moa-outliner .menu .child-row-toggle:not([hidden]){display:flex;align-items:center;white-space:nowrap}
 .moa-outliner .menu .child-row-toggle::before{content:"";flex:0 0 1em}
 .moa-outliner .menu .child-row-toggle[aria-pressed="true"]::before{content:"✓" / ""}
@@ -782,11 +782,11 @@ const template = String.raw`<div class="page">
 <!-- Owner override 2026-10-27: idle depth observes this branch; Apply normalizes it, and deliberate depth commands enable Sync Collapse. -->
 <!-- Owner override: hierarchy styling is automatic and Expand All is the first top menu action. -->
 <!-- Owner override: file import opens first. Copy keeps the clipboard behavior and Export as .txt downloads the same outline text. -->
-<!-- Latest owner override: Home alone offers Plain Text and Hierarchy between Import and expansion. -->
+<!-- Owner override: Home and Focus share Plain Text and Hierarchy between Import and expansion. -->
 <div class="menu" id="ol-topMenu"><button data-a="importFile">Import File to Home</button>${menuSeparator}
-<div class="home-text-style" role="group" aria-label="Home text style" hidden>
-<button type="button" data-a="homeTextStyle" data-style="plain" aria-pressed="false">Plain Text</button>
-<button type="button" data-a="homeTextStyle" data-style="hierarchy" aria-pressed="true">Hierarchy</button>
+<div class="text-style" role="group" aria-label="Outliner text style">
+<button type="button" data-a="textStyle" data-style="plain" aria-pressed="false">Plain Text</button>
+<button type="button" data-a="textStyle" data-style="hierarchy" aria-pressed="true">Hierarchy</button>
 ${menuSeparator}</div>
 <button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1" aria-describedby="ol-depth-status ol-depth-feedback"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div><button type="button" class="depth-apply">Apply</button><span id="ol-depth-status" class="depth-status"></span><div id="ol-depth-feedback" class="depth-feedback" hidden></div></div>${menuSeparator}
 ${textMenuActions([['visible', ' Visible'], ['focus', ' Focus'], ['all', ' All']])}${menuSeparator}<button data-a="clearAll">Clear All</button></div>
@@ -1400,7 +1400,6 @@ function save(typing, scrollNodeId) {
 function restore(i, scrollNodeId) {
   const value = outlineValue(hist[i]), d = JSON.parse(value);
   const viewOnly = d.zoom !== zoom.id && historyRootEqual(snap(), value);
-  const scrollNode = d.zoom === zoom.id && scrollNodeId != null ? find(root, scrollNodeId) : null;
   if (viewOnly) blurOutlineText();
   // Search state is keyed by node objects, and undo/redo rebuilds every node: carry it over by id so bullets typed during a search stay visible.
   const keepIds = [...sKeep].map(n => n.id), overIds = [...sOver].map(([n, v]) => [n.id, v]);
@@ -1411,7 +1410,7 @@ function restore(i, scrollNodeId) {
   sOver.clear(); overIds.forEach(([id, v]) => { const n = find(root, id); if (n) sOver.set(n, v); });
   const a = viewOnly || ipadToolbarHistoryNoFocus || historyHost && !visibleHost() ? null : ownedActiveElement();
   const focusId = a?.dataset?.id ? +a.dataset.id : null;
-  if (scrollNode) renderKeepingNodePosition(scrollNode, focusId, null); else render(focusId);
+  render(focusId, undefined, {anchorId:scrollNodeId, restoringHistory:true});
   reconcilePresentationMenu();
 }
 function undo() { depthController?.invalidate(); endAdjustment(); if (tm) record(); if (hi > 0) { const entry = hist[hi]; restore(--hi, entry.scrollNodeId); } }
@@ -1473,15 +1472,20 @@ const setEditorHeight = (t,height) => { t.style.height=height; if(t.dataset.role
 const fit = t => { t.style.height = 'auto'; setEditorHeight(t,t.scrollHeight + 'px'); t.scrollTop = 0; };
 
 const REGULAR_LEVEL = 2;
-const HOME_TEXT_STYLE_KEY = 'moa:outliner:homeTextStyle';
-let plainHomeText = false;
-try { plainHomeText = localStorage.getItem(HOME_TEXT_STYLE_KEY) === 'plain'; } catch (_) {}
+// Keep the existing preference key so saved Home choices also apply in Focus.
+const TEXT_STYLE_KEY = 'moa:outliner:homeTextStyle';
+let plainText = false;
+try { plainText = localStorage.getItem(TEXT_STYLE_KEY) === 'plain'; } catch (_) {}
 // Line height keeps the default 22/16 ratio; the row height adds the 6px of vertical padding so the dots stay centred on the first line.
 function levelStyle(level) {
-  const fs = level === 0 ? 28 : 16, lh = Math.round(fs * 22 / 16);
-  return { '--fs': fs + 'px', '--lh': lh + 'px', '--bh': (lh + 6) + 'px', '--fw': level < REGULAR_LEVEL ? 600 : 400 };
+  const fs = !plainText && level === 0 ? 28 : 16, lh = Math.round(fs * 22 / 16);
+  const bold = plainText ? level === 0 && zoom !== root : level < REGULAR_LEVEL;
+  return { '--fs': fs + 'px', '--lh': lh + 'px', '--bh': (lh + 6) + 'px', '--fw': bold ? 600 : 400 };
 }
-const setLevel = (e, level) => Object.entries(levelStyle(level)).forEach(([k, v]) => e.style.setProperty(k, v));
+function setLevel(e, level) {
+  if (level < REGULAR_LEVEL) e.dataset.textLevel = level;
+  Object.entries(levelStyle(level)).forEach(([k, v]) => e.style.setProperty(k, v));
+}
 
 // Shared row/head editor binding. Canonical offsets never depend on the active field.
 function readEditorRange(n, textarea) {
@@ -1554,11 +1558,17 @@ function updateEditorBadge(binding,node){
     if(binding.description)fit(binding.description);
   }
 }
-function focusEditor(binding, pos) {
-  if (binding.getNode().photos) { binding.photos?.querySelector("button")?.focus(); return; }
+function focusEditor(binding, pos, preventScroll = false) {
+  if (binding.getNode().photos) {
+    const button = binding.photos?.querySelector('button');
+    button?.focus({preventScroll});
+    return button;
+  }
   const n = binding.getNode(), p = pos == null ? n.text.length : Math.max(0, Math.min(pos, n.text.length)), parts = splitNodeText(n.text,n.titleLineCount);
   const desc = parts.hasDescription && p > parts.title.length, t = desc ? binding.description : binding.title, local = desc ? p - parts.title.length - 1 : p;
-  if (!t) return; t.focus(); t.setSelectionRange(local, local);
+  if (!t) return;
+  t.focus({preventScroll}); t.setSelectionRange(local, local);
+  return t;
 }
 function saveFieldCommand(binding) {
   save();
@@ -1715,7 +1725,60 @@ function bindNodeEditor(host, n, head = false, title = null) {
 }
 
 // Redraws everything. DO NOT add automatic caret restoration here (rejected). Callers pass focusId when they want a bullet focused.
-function render(focusId, pos, scrollNodeId) {
+// Every same-view redraw uses the old DOM, even when history has replaced the node objects.
+function keepSheetPosition(update, anchorId, fallbackToTop = false) {
+  const scope = zoom.id, scroll = treeEl.scrollTop, bounds = treeEl.getBoundingClientRect();
+  if (!bounds.height || !els.size) { update(); return; }
+  const rows = [...els], anchors = [];
+  let first = -1, after = rows.length, preferred;
+  for (const [index, [node, row]] of rows.entries()) {
+    const rect = row.getBoundingClientRect();
+    if (rect.top >= bounds.bottom) { after = index; break; }
+    if (rect.bottom <= bounds.top) continue;
+    if (first < 0) first = index;
+    const anchor = [node.id, rect.top - bounds.top];
+    if (node.id === anchorId) preferred = anchor;
+    else anchors.push(anchor);
+  }
+  update();
+  if (zoom.id !== scope) return;
+  const top = treeEl.getBoundingClientRect().top;
+  function restoreAnchor([id, offset = 0]) {
+    const row = treeEl.querySelector(`.node[data-id="${id}"] > .row`);
+    if (!row) return false;
+    treeEl.scrollTop += row.getBoundingClientRect().top - top - offset;
+    return true;
+  }
+  if ((preferred && restoreAnchor(preferred)) || anchors.some(restoreAnchor)) return;
+  // A whole screen of children can disappear. Return to their branch or the nearest surviving row.
+  if (first >= 0 && !fallbackToTop) {
+    const remaining = new Set([...els.keys()].map(node => node.id));
+    for (let group = rows[first][1].parentElement.parentElement?.closest('.node'); group;
+         group = group.parentElement?.closest('.node')) {
+      const id = +group.dataset.id;
+      if (remaining.has(id) && restoreAnchor([id])) return;
+    }
+    const neighbor = rows.slice(after).find(([node]) => remaining.has(node.id)) ??
+      rows.slice(0, first).findLast(([node]) => remaining.has(node.id));
+    if (neighbor && restoreAnchor([neighbor[0].id])) return;
+  }
+  treeEl.scrollTop = fallbackToTop ? 0 : scroll;
+}
+
+let renderedZoomId;
+function render(focusId, pos, {anchorId, restoringHistory = false, keepPosition = true, fallbackToTop = false} = {}) {
+  const sameView = keepPosition && zoom.id === renderedZoomId;
+  const draw = () => drawOutline(restoringHistory ? undefined : anchorId);
+  if (sameView) keepSheetPosition(draw, anchorId ?? focusId, fallbackToTop);
+  else draw();
+  renderedZoomId = zoom.id;
+  if (!focusId) return;
+  const field = focusNode(focusId, pos, sameView);
+  // Editing can intentionally move the caret to a new row just outside the viewport.
+  if (sameView && !restoringHistory) revealFocusedField(field);
+}
+
+function drawOutline(scrollNodeId) {
   const nodes = zoom !== root || focusVisits.length ? new Map() : null;
   par = new Map(); buildPar(root, nodes);
   if (nodes) reconcileFocusVisits(nodes);
@@ -1729,15 +1792,14 @@ function render(focusId, pos, scrollNodeId) {
   // Drop selection / anchor entries that are gone or outside the current view; a stale selection used to swallow Enter, Delete and Tab.
   for (const n of [...sel]) { let x = n; while (x && x !== zoom) x = par.get(x); if (!x) sel.delete(n); }
   if (anchor && !par.has(anchor)) anchor = null; if (cursor && !par.has(cursor)) cursor = null;
-  els.clear(); const tree = container.querySelector('#ol-tree'); removePhotoPreviews(tree); tree.innerHTML = '';
+  els.clear(); removePhotoPreviews(treeEl); treeEl.innerHTML = '';
   if (searching()) computeSets();
   const children = shownKids(zoom);
   if (zoom !== root && !isOpen(zoom) && realChildren(zoom).length) { sel.clear(); anchor = cursor = null; }
-  children.forEach(c => tree.appendChild(row(c, false, 0)));
-  if (searching() && !sShown.size) { const m = el('div', 'nomatch'); m.textContent = 'No matches'; tree.appendChild(m); }
-  tree.querySelectorAll('textarea').forEach(fit);
+  children.forEach(c => treeEl.appendChild(row(c, false, 0)));
+  if (searching() && !sShown.size) { const m = el('div', 'nomatch'); m.textContent = 'No matches'; treeEl.appendChild(m); }
+  treeEl.querySelectorAll('textarea').forEach(fit);
   crumbs(); head(); save(false, scrollNodeId);
-  if (focusId) focusNode(focusId, pos);
 }
 // Big title for the bullet you zoomed into (hidden at Home). It edits that bullet's text.
 const titleEl = container.querySelector('#ol-title'), headEl = container.querySelector('#ol-head');
@@ -1745,7 +1807,6 @@ let headBinding = null, headControls = null;
 function head() {
   const on = zoom !== root, wasFocused = headEl.classList.contains('show');
   headEl.classList.toggle('show', on);
-  homeTextStyle.hidden = on;
   const previousId = +titleEl.dataset.id;
   if (wasFocused && previousId !== zoom.id && menuNode?.id === previousId && menu.classList.contains('show')) {
     numericBindings.forEach(binding => binding.finish());
@@ -1765,9 +1826,17 @@ function head() {
   } else refreshNodeEditor(headBinding);
 }
 const toFirst = () => { const c = zoom.children[0]; if (c) focusNode(c.id, 0); };
-function focusNode(id, pos) {
+function focusNode(id, pos, preventScroll = false) {
   const n = find(root, +id), r = n && els.get(n), host = r && r.querySelector('.tw');
-  if (host && host._nodeEditor) focusEditor(host._nodeEditor, pos);
+  if (host && host._nodeEditor) return focusEditor(host._nodeEditor, pos, preventScroll);
+}
+function revealFocusedField(field, onlyWhenHidden = false) {
+  if (!field) return;
+  if (onlyWhenHidden) {
+    const bounds = treeEl.getBoundingClientRect(), rect = field.getBoundingClientRect();
+    if (rect.bottom > bounds.top && rect.top < bounds.bottom) return;
+  }
+  field.scrollIntoView({block:'nearest', inline:'nearest', behavior:'instant'});
 }
 // Shared bullet/breadcrumb navigation: separate pending typing from the view step.
 function blurOutlineText() {
@@ -1823,7 +1892,7 @@ function revealNode(id, photoId) {
       setNodeOpen(parent, true); changed = true;
     }
   }
-  if (changed || filtered) render();
+  if (changed || filtered) render(undefined, undefined, {keepPosition:false});
   const row = node === zoom ? headEl : els.get(node);
   const target = photoId === undefined ? row :
     row?.querySelectorAll('.photo-thumb')[photoIndex];
@@ -1896,23 +1965,6 @@ function updateChevron(arrow, node) {
   if (hasChildren) arrow.setAttribute('aria-expanded', String(open));
   else arrow.removeAttribute('aria-expanded');
 }
-// Rebuilding the sheet can reset its offset or move the browser's scroll anchor.
-function renderKeepingNodePosition(node, focusId, scrollNodeId = node.id) {
-  const previousScroll = treeEl.scrollTop;
-  const previousTop = els.get(node)?.getBoundingClientRect().top;
-  render(focusId, undefined, scrollNodeId);
-  // History restores new node objects with the same IDs.
-  const currentRow = els.get(node) ?? els.get(find(root, node.id));
-  const currentTop = currentRow?.getBoundingClientRect().top;
-  if (previousTop === undefined || currentTop === undefined) {
-    treeEl.scrollTop = previousScroll;
-  } else if (currentTop !== previousTop) {
-    treeEl.scrollTop += currentTop - previousTop;
-  }
-}
-function renderBranchToggle(node) {
-  renderKeepingNodePosition(node);
-}
 function createNodeControls(getNode, focused = false) {
   const arrow = el('button', 'arrow'), more = el('button', 'dots');
   const chevron = el('span'), dots = el('span');
@@ -1932,7 +1984,7 @@ function createNodeControls(getNode, focused = false) {
     if (!realChildren(node).length) return;
     const open = !isOpen(node);
     if (e.ctrlKey || e.metaKey) setOpen(node, open); else setNodeOpen(node, open);
-    renderBranchToggle(node);
+    render(undefined, undefined, {anchorId:node.id});
   };
   // The ... button on each bullet opens the bullet menu. DO NOT add mousedown preventDefault to it or to the triangle (rejected, see summary at the top).
   more.onclick = e => { e.stopPropagation(); openMenu(getNode(), more); };
@@ -1943,9 +1995,7 @@ function createNodeControls(getNode, focused = false) {
 function row(n, inSel, d) {
   const wrap = el('div', 'node'); wrap.dataset.id = n.id;
   const r = el('div', 'row'); const selOn = inSel || sel.has(n); if (selOn) r.classList.add('sel'); els.set(n, r);
-  const atHome = zoom === root, level = atHome ? d : d + 1;
-  if (atHome && level < REGULAR_LEVEL) r.dataset.homeLevel = level;
-  setLevel(r, atHome && plainHomeText ? REGULAR_LEVEL : level);
+  setLevel(r, zoom === root ? d : d + 1);
   const {more, arrow} = createNodeControls(() => n);
   const bu = el('a', 'bullet' + (n.children.length && !isOpen(n) ? ' closed' : '')); bu.innerHTML = '<i></i>'; bu.title = 'Zoom in';
   // Owner V1.1 exception: bullet navigation opens the view without starting text entry.
@@ -1992,7 +2042,7 @@ function tab(back) {
   if (back && it.some(n => par.get(n) === zoom)) return;
   const active = ownedActiveElement(), t = sel.size ? null : active && active.matches(`textarea[data-id="${it[0].id}"]`) ? active : container.querySelector(`#ol-tree textarea[data-id="${it[0].id}"]`), pos = t ? readEditorRange(it[0], t).start : null;
   (back ? it.slice().reverse() : it).forEach(n => back ? outdent(n) : indent(n));
-  render(sel.size ? null : it[0].id, pos);
+  render(sel.size ? null : it[0].id, pos, {anchorId:it[0].id});
 }
 // Split the bullet at the caret into a new bullet (or outdent when the bullet is empty). Shared by Enter and the toolbar.
 // Current owner override: split titles into same-level siblings; descriptions keep their own newlines.
@@ -2029,12 +2079,12 @@ function enter(n, t) {
     setNodeText(n,{...parts,title:parts.title.slice(intent.start)});
     p.children.splice(p.children.indexOf(n), 0, upper);
     if (searching()) { sKeep.add(n); sKeep.add(upper); }
-    render(intent.start === 0 ? upper.id : n.id, 0); return;
+    render(intent.start === 0 ? upper.id : n.id, 0, {anchorId:n.id}); return;
   }
   setNodeText(n,parts); const nn = mk();
   if (searching()) { sKeep.add(n); sKeep.add(nn); }
   insertAfterNodeEnd(n,nn);
-  render(nn.id, 0);
+  render(nn.id, 0, {anchorId:n.id});
 }
 
 function paint() { const mark = (n, p) => { const r = els.get(n), on = p || sel.has(n); if (r) r.classList.toggle('sel', on); n.children.forEach(c => mark(c, on)); }; zoom.children.forEach(c => mark(c, false)); }
@@ -2094,18 +2144,23 @@ function dropTo(items, t) {
   clearSpacerKind(t.parent);
   if (t.open) writeViewOpen(t.parent, true);
   const k = t.parent.children, i = t.before ? k.indexOf(t.before) : k.length;
-  k.splice(i < 0 ? k.length : i, 0, ...items); render(null);
+  k.splice(i < 0 ? k.length : i, 0, ...items);
+  render(null, undefined, {anchorId:(t.before ?? t.parent).id});
 }
 listen(treeEl, 'dragover', e => { if (!dragSet) return; aimDrop(e); if (dropT) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; } });
 listen(treeEl, 'dragleave', e => { if (!treeEl.contains(e.relatedTarget)) clearDrop(); });
 listen(treeEl, 'drop', e => { if (!dragSet) return; e.preventDefault(); const t = dropT, items = dragSet; dragSet = null; clearDrop(); if (t) dropTo(items, t); });
-function delItems(items) {
-  const idx = vis().indexOf(items[0]);
+function delItems(items, {focusPrevious = true} = {}) {
+  if (!focusPrevious) blurOutlineText();
   const focusRemoved = zoom !== root && items.some(node => isWithin(zoom, node.id));
+  const restoreFocus = focusPrevious && !focusRemoved;
+  const deletedIndex = restoreFocus ? vis().indexOf(items[0]) : -1;
   if (focusRemoved) depthController?.invalidate();
-  items.forEach(rm); sel.clear(); render(null);
-  if (focusRemoved) return;
-  const l = vis(), f = l[Math.max(0, Math.min(idx - 1, l.length - 1))]; if (f) focusNode(f.id);
+  items.forEach(rm); sel.clear(); render();
+  if (!restoreFocus) return;
+  const visible = vis();
+  const previous = visible[Math.max(0, Math.min(deletedIndex - 1, visible.length - 1))];
+  if (previous) revealFocusedField(focusNode(previous.id, undefined, true), true);
 }
 // Bullet menu. Wording is a requirement: Expand All / Collapse All act on this bullet's subtree, Export Visible, Export, Delete.
 const menu = container.querySelector('#ol-menu'),numericBindings=[];
@@ -2194,7 +2249,7 @@ function presentationCommand(action,n=menuNode,value,reset=false){
     delete spacer.childrenInRow;
     spacer.kind='spacer';if(searching())sKeep.add(spacer);
   }
-  menu.classList.remove('show');renderKeepingNodePosition(n);return true;
+  menu.classList.remove('show');render(undefined, undefined, {anchorId:n.id});return true;
 }
 function commitSize(){
   if(sizeComposing||historyComposing)return false;
@@ -2271,10 +2326,10 @@ menu.onclick = e => {
   }
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
   else if (a === 'addPhoto') choosePhoto(menuNode);
-  else if (a === 'delete') delItems(menuT);
+  else if (a === 'delete') delItems(menuT, {focusPrevious:false});
   else if (a === 'importFile') chooseOutlineFile(menuNode);
   else if (a === 'copy' || a === 'download') outputOutlineText(e.target, menuT);
-  else if (a === 'expand' || a === 'collapse') { depthController?.invalidate(); menuT.forEach(n => setOpen(n, a === 'expand')); renderBranchToggle(menuNode); }
+  else if (a === 'expand' || a === 'collapse') { depthController?.invalidate(); menuT.forEach(n => setOpen(n, a === 'expand')); render(undefined, undefined, {anchorId:menuNode.id}); }
 };
 listen(document, 'click', e => { if (menu.classList.contains('show') && !menu.contains(e.target)) menu.classList.remove('show'); if (topMenu.classList.contains('show') && !topMenu.contains(e.target)) {depthController?.close();topMenu.classList.remove('show');} });
 
@@ -2317,7 +2372,7 @@ function keys(e, n, t) {
     }
     if (mod) {
       e.preventDefault();
-      if (n.children.length) { setNodeOpen(n, !up); render(n.id, pos); }
+      if (n.children.length) { setNodeOpen(n, !up); render(n.id, pos, {anchorId:n.id}); }
       return;
     }
     const first = pos === 0 || t.value.lastIndexOf('\n', pos - 1) === -1, last = t.value.indexOf('\n', end) === -1;
@@ -2359,7 +2414,7 @@ function placeItems(items, target, replaceEmpty) {
 function insertItems(items, target, replaceEmpty) {
   const last = placeItems(items, target, replaceEmpty && !target.photos && !target.text.trim() && !target.children.length);
   if (searching()) { sKeep.add(target); items.forEach(i => sKeep.add(i)); }
-  sel.clear(); render(last.photos ? null : last.id);
+  sel.clear(); render(last.photos ? null : last.id, undefined, {anchorId:target.id});
 }
 // Photo nodes are childless and contain only photos. On load, ZIP import and rich paste,
 // keep legacy text and children on their original branch and move the photos to a new first child.
@@ -2633,13 +2688,13 @@ function positionMenu(target, anchor, top = false) {
   target.style.top = Math.max(y + margin, Math.min(anchor.bottom + (top ? 4 : 0), y + height - r.height - margin)) + 'px';
 }
 const topMenu = container.querySelector('#ol-topMenu'), moreBtn = container.querySelector('#ol-moreBtn');
-const homeTextStyle = topMenu.querySelector('.home-text-style');
-function updateHomeTextStyleMenu() {
-  homeTextStyle.querySelectorAll('button').forEach(button => {
-    button.setAttribute('aria-pressed', String((button.dataset.style === 'plain') === plainHomeText));
+const textStyleButtons = topMenu.querySelectorAll('.text-style button');
+function updateTextStyleMenu() {
+  textStyleButtons.forEach(button => {
+    button.setAttribute('aria-pressed', String((button.dataset.style === 'plain') === plainText));
   });
 }
-updateHomeTextStyleMenu();
+updateTextStyleMenu();
 // Owner-approved immediate depth actions; target/draft state never enters history.
 // Idle depth is derived; only deliberate commands normalize expansion and publish intent.
 function createDepthController(){
@@ -2850,15 +2905,17 @@ topMenu.onclick = e => {
   // Current owner override: Export Focus retains historical zoom scope; Export All uses Home.
   else if (a === 'copy' || a === 'download') outputOutlineText(e.target, null);
   else if (a === 'importFile') chooseOutlineFile(null);
-  else if (a === 'homeTextStyle' && zoom === root) {
+  else if (a === 'textStyle') {
     const plain = e.target.dataset.style === 'plain';
-    if (plain === plainHomeText) return;
-    plainHomeText = plain;
-    try { localStorage.setItem(HOME_TEXT_STYLE_KEY, plain ? 'plain' : 'hierarchy'); } catch (_) {}
-    updateHomeTextStyleMenu();
-    container.querySelectorAll('#ol-tree [data-home-level]').forEach(row => {
-      setLevel(row, plain ? REGULAR_LEVEL : Number(row.dataset.homeLevel));
-      fit(row.querySelector('textarea[data-role="title"]'));
+    if (plain === plainText) return;
+    plainText = plain;
+    try { localStorage.setItem(TEXT_STYLE_KEY, plain ? 'plain' : 'hierarchy'); } catch (_) {}
+    updateTextStyleMenu();
+    keepSheetPosition(() => {
+      container.querySelectorAll('.head.show[data-text-level], .row[data-text-level]').forEach(editor => {
+        setLevel(editor, Number(editor.dataset.textLevel));
+        fit(editor.querySelector('textarea[data-role="title"]'));
+      });
     });
   }
 };
@@ -3047,7 +3104,8 @@ function startSearch(v) {
   const changed=sq!==v;
   depthController?.invalidate();
   if (integratedHeader) qIn.value = v;
-  sq = v; sOver.clear(); sKeep.clear(); sel.clear(); qBox.classList.add('on'); qIn.blur(); syncSearchAction(); render();
+  sq = v; sOver.clear(); sKeep.clear(); sel.clear(); qBox.classList.add('on'); qIn.blur(); syncSearchAction();
+  render(undefined, undefined, {fallbackToTop:true});
   if(changed)emit('search',{query:sq});
 }
 function endSearch(redraw = true) {
@@ -3141,8 +3199,8 @@ const refit = () => {
     if (!refitFontDirty && width === refitWidth && treeWidth === refitTreeWidth) return;
     paneLayout(); resizeCrumbs();
     const textareas = [...container.querySelectorAll('#ol-tree textarea, #ol-head textarea')];
-    // Sequential fit preserves native scroll anchoring when the sheet is scrolled.
-    if (treeEl.scrollTop) textareas.forEach(fit);
+    // Preserve a visible row while sequentially measuring a scrolled sheet.
+    if (treeEl.scrollTop) keepSheetPosition(() => textareas.forEach(fit));
     else {
       textareas.forEach(t => { t.style.height = 'auto'; });
       const heights = textareas.map(t => t.scrollHeight);
@@ -3474,9 +3532,7 @@ function commitPhotoChange(node, update) {
   record();
   promotePresentation(node);
   update();
-  const sheet = container.querySelector('.sheet'), scrollTop = sheet.scrollTop;
-  render();
-  sheet.scrollTop = scrollTop;
+  render(undefined, undefined, {anchorId:node.id});
 }
 
 const photoInput = container.querySelector('#ol-photo-file');
@@ -3641,6 +3697,7 @@ function syncPhotoRow(binding) {
         listen(remove, 'click', event => {
           event.stopPropagation();
           if (!par.has(node) || !node.photos?.includes(photo)) return;
+          blurOutlineText();
           commitPhotoChange(node, () => {
             if (node.photos.length === 1) rm(node);
             else node.photos = node.photos.filter(item => item !== photo);
@@ -3670,5 +3727,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, showToast: toast, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.22.15', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.22.20', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();

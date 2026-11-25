@@ -1,4 +1,4 @@
-/* MindMap 1.20.1 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.20.2 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -1186,7 +1186,7 @@ function makeHbFont(hb,tf){
   return font;
 }
 
-async function exportPDF({onWarning}={}){
+async function exportPDF({onWarning,prepareOnly=false}={}){
   if(destroyed||pdfBusy)return;
   const hosted=typeof onWarning==='function';
   pdfBusy=true;container.setAttribute('aria-busy','true');
@@ -1205,12 +1205,15 @@ async function exportPDF({onWarning}={}){
     if(destroyed)return;
     const hbFontR=makeHbFont(hb,tfR);
     const hbFontB=makeHbFont(hb,tfB);
-    await _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB);
+    const file=await _buildPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB);
+    if(!file||destroyed)return;
+    if(!prepareOnly)downloadPDF(file);
     if(!destroyed&&(!tfR||!tfB)){
       const message='PDF font download failed. Thai output may be incomplete.';
       if(hosted){try{onWarning(message);}catch(error){console.error(error);}}
       else reportError(new Error(message));
     }
+    if(prepareOnly&&!destroyed)return file;
   }catch(err){
     if(destroyed)return;
     if(!hosted)reportError(new Error('PDF export failed: '+(err.message||err)));
@@ -1378,7 +1381,7 @@ function pdfLabelRaster(label){
   };
 }
 
-async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
+async function _buildPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
   const PDF_SCALE=0.25;
   const cb=snapshot.bounds;
   const PAD=Math.round(Math.max(cb.w,cb.h)*TREE_PAD_FRAC);
@@ -1556,12 +1559,16 @@ async function _buildAndDownloadPDF(snapshot,hb,hbFontR,hbFontB,tfR,tfB){
   let xref=`xref\n0 ${totalObjs+1}\n0000000000 65535 f \n`;
   for(const off of offs)xref+=`${String(off).padStart(10,'0')} 00000 n \n`;
   const trailer=`trailer\n<< /Size ${totalObjs+1} /Root ${catId} 0 R >>\nstartxref\n${xrefPos}\n%%EOF\n`;
-  const blob=new Blob([hdr,...parts,xref,trailer],{type:'application/octet-stream'});
-  const url=URL.createObjectURL(blob);
+  return new File([hdr,...parts,xref,trailer],snapshot.filename,{type:'application/pdf'});
+}
+
+function downloadPDF(file){
+  const url=URL.createObjectURL(file);
   const a=document.createElement('a');
-  a.href=url;a.download=snapshot.filename;
+  a.href=url;a.download=file.name;a.hidden=true;
   objectURLs.add(url);container.appendChild(a);a.click();
-  setTimeout(()=>{a.remove();URL.revokeObjectURL(url);objectURLs.delete(url);},1500);
+  // Let the browser finish taking ownership of the file before releasing its URL.
+  setTimeout(()=>{a.remove();if(objectURLs.delete(url))URL.revokeObjectURL(url);},60000);
 }
 
 const st={lay:null,scale:1,panX:0,panY:0};
@@ -2246,5 +2253,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.20.1',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
+window.MindMap={version:'1.20.2',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','pdf-prepare-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
 })();
