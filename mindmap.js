@@ -1,4 +1,4 @@
-/* MindMap 1.20.2 | apiVersion 1 | Classic mountable module.
+/* MindMap 1.20.6 | apiVersion 1 | Classic mountable module.
  * Frozen source: Original/mindmap.original.html; Phase 2 extraction recipe in dev/.
  * Host supplies usable dimensions and the Outliner CSS color-token contract.
  */
@@ -384,21 +384,30 @@ const nodeWidth=n=>n.textBlock.width;
 
 // Descriptions reserve two visual font levels, never real tree depth/statistics.
 function hasDescription(n){return n.description!==undefined||n.children.some(hasDescription);}
-function visualMaxD(root){let depth=0;const walk=n=>{if(!n.synthetic&&n.kind!=='spacer')depth=Math.max(depth,n.depth+(n.description!==undefined?2:0));n.children.forEach(walk);};walk(root);return depth;}
-function lastLeafFs(n){return n.children.length?lastLeafFs(n.children[n.children.length-1]):n.fs;}
+const isPhotoOnly = node => node.photos?.length && !node.label.trim() && node.description === undefined;
+function visualMaxD(root){
+  let depth=0;
+  const walk=node=>{
+    if(!node.synthetic&&node.kind!=='spacer'&&!isPhotoOnly(node))depth=Math.max(depth,node.depth+(node.description!==undefined?2:0));
+    node.children.forEach(walk);
+  };
+  walk(root);return depth;
+}
 
 /* ══ ARM / SPINE HELPERS ══ */
 const armLen=(d,MD)=>fsz(d,MD)*C.ARM_K;
 // Ephemeral direct-child metrics: no spacer/synthetic vote and no inherited growth.
 function prepareFamily(node,MD){
-  let count=0,sum=0,first=1,max=1,homogeneous=true,unit=0;
+  let count=0,votes=0,sum=0,first=1,max=1,homogeneous=true,unit=0;
   for(const ch of node.children){
     if(ch.kind==='spacer')continue;
+    count++;unit=Math.max(unit,ch.baseFs);
+    if(isPhotoOnly(ch))continue;
     const value=Math.max(1,ch.mapSize??1);
-    if(!count)first=value;else if(value!==first)homogeneous=false;
-    count++;sum+=Math.log(value);max=Math.max(max,value);unit=Math.max(unit,ch.baseFs);
+    if(!votes)first=value;else if(value!==first)homogeneous=false;
+    votes++;sum+=Math.log(value);max=Math.max(max,value);
   }
-  const growth=node.synthetic||!count?1:homogeneous?first:clamp(Math.exp(sum/count),1,max);
+  const growth=node.synthetic||!votes?1:homogeneous?first:clamp(Math.exp(sum/votes),1,max);
   node.family={count,growth,unit:unit||Math.max(0,...node.children.map(ch=>ch.baseFs))};
   for(const ch of node.children)ch.incomingWidth=familyWidth(node,ch.depth,MD);
 }
@@ -423,37 +432,24 @@ function spineOffsetOf(node){
 
 function spineXOf(node){return node.x+spineOffsetOf(node);}
 
-function assignSubtreeX(node,MD){
-  if(node.subtree){for(const offset of node.subtree.childOffsets){offset.node.x=node.x+offset.x;assignSubtreeX(offset.node,MD);}return;}
-  const sx=spineXOf(node);
-  node.children.filter(ch=>ch.kind!=='spacer').forEach(ch=>{
-    ch.x=sx+familyArm(node,ch.depth,MD);
-    assignSubtreeX(ch,MD);
-  });
-}
-
-function colW(n,MD){
-  if(n.subtree)return n.subtree.maxX-n.subtree.minX;
-  let mx=0;
-  const wk=(node,rx)=>{
-    const r=rx+nodeWidth(node);
-    if(r>mx)mx=r;
-    const sx=rx+spineOffsetOf(node);
-    node.children.forEach(ch=>wk(ch,sx+familyArm(node,ch.depth,MD)));
-  };
-  wk(n,0);
-  return mx;
+function assignSubtreeX(node){
+  for(const {node:child,x} of node.subtree.childOffsets){
+    child.x=node.x+x;
+    assignSubtreeX(child);
+  }
 }
 
 /* ══ ROOT GRID HELPERS ══ */
-function footprintW(node,MD){
-  return Math.max(titleWidth(node),colW(node,MD));
+function footprintW(node){
+  const {minX,maxX}=node.subtree;
+  return Math.max(titleWidth(node),maxX-minX);
 }
 function thaiTierBonusFrac(tier){
   switch(tier){case 1:return C.THAI_TIER1_R;case 2:return C.THAI_TIER2_R;case 3:return C.THAI_TIER3_R;default:return 0;}
 }
+const siblingBaseGap=(child,parent)=>grow(parent,child.baseFs*C.SIBLING_GAP_R);
 function siblingGapDelta(ch,prevLastLeafFs,parent){
-  let g=grow(parent,ch.baseFs*C.SIBLING_GAP_R);
+  let g=siblingBaseGap(ch,parent);
   if(ch.baseFs>prevLastLeafFs)g+=grow(parent,ch.baseFs*C.RISE_PAD_R);
   g+=ch.fs*thaiTierBonusFrac(ch.thaiTier);
   return g;
@@ -461,24 +457,68 @@ function siblingGapDelta(ch,prevLastLeafFs,parent){
 function lowerThaiChildBonus(parentNode,baseGap){
   return parentNode.hasLower?baseGap*C.LOWER_THAI_CHILD_R:0;
 }
-function describedChildrenOffset(node,subGap){
-  return node.textBlock.bottom+subGap+firstRowUpwardBonus([node.children[0]],node.children[0].fs);
+function describedChildrenOffset(node,subGap,first=node.children[0],block=node.textBlock){
+  return block.bottom+subGap+firstRowUpwardBonus([first],first.fs);
 }
-function stackedChildrenOffset(node,subGap,sR){
-  return node.description!==undefined?describedChildrenOffset(node,subGap):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+node.textBlock.extraHeight;
+function stackedChildrenOffset(node,subGap,sR,first=node.children[0],block=node.textBlock){
+  return node.description!==undefined?describedChildrenOffset(node,subGap,first,block):node.fs*C.LINE_H*sR+subGap+lowerThaiChildBonus(node,subGap)+block.extraHeight;
 }
-function footprintH(node,MD){
-  if(node.subtree)return node.subtree.height;
-  if(!node.children.length)return node.fs*C.LINE_H+node.textBlock.extraHeight;
-  const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1;
-  const subGap=familySubGap(node);
-  let h=stackedChildrenOffset(node,subGap,sR);
-  for(let i=0;i<node.children.length;i++){
-    const ch=node.children[i];
-    if(i>0)h+=siblingGapDelta(ch,node.children[i-1].subtree?.lastLeafBaseFs??lastLeafFs(node.children[i-1]),node);
-    h+=footprintH(ch,MD);
+const sideConnectorOffset=node=>node.fs*node.capFrac;
+const sideConnectorY=node=>node.y+sideConnectorOffset(node);
+const occupiedFootprint=row=>row.subtree;
+const textFootprint=row=>row.subtree.reference;
+function sharesStackDistance(row,anchor){
+  return textFootprint(row)?.text&&(!anchor||(!row.canonicalHasChildren&&!row.children.length));
+}
+// Childless connector rows share a pitch with a minimum based on ink clearance.
+function measureStack(columns,spacing,minimum,clearInk=false,anchor=null){
+  let sum=0,count=0,floor=anchor?0:Infinity;
+  for(const rows of columns){
+    let previous;
+    for(const row of rows){
+      const ref=textFootprint(row);
+      if(!sharesStackDistance(row,anchor)){
+        // A branch ends the run. Photos and spacers leave the text samples intact.
+        if(ref?.text)previous=undefined;
+        continue;
+      }
+      if(previous){
+        const prior=textFootprint(previous);
+        const advance=prior.height+spacing(previous,row)-(clearInk?Math.min(0,ref.top):0);
+        if(anchor){
+          const delta=anchor(row)-anchor(previous);
+          sum+=advance+delta;
+          floor=Math.max(floor,prior.bottom-ref.top+delta+minimum(row));
+        }else{
+          sum+=advance-prior.bottom+ref.top;
+          floor=Math.min(floor,minimum(row));
+        }
+        count++;
+      }
+      previous=row;
+    }
   }
-  return h;
+  return {distance:count?Math.max(sum/count,floor):null,spacing,minimum,anchor};
+}
+// With photos or spacers, extra clearance affects only the occupied boundary.
+function placeStack(rows,start,{distance,spacing,minimum,anchor},visit,footprint=occupiedFootprint){
+  let previous,y=start,end=start;
+  for(const row of rows){
+    const box=footprint(row);
+    if(previous){
+      const prior=footprint(previous),clearance=prior.bottom-box.top;
+      if(distance!==null&&sharesStackDistance(previous,anchor)&&sharesStackDistance(row,anchor)){
+        const advance=anchor?Math.max(distance+anchor(previous)-anchor(row),clearance+minimum(row)):clearance+distance;
+        y+=advance;
+      }else{
+        y+=Math.max(prior.height,clearance)+spacing(previous,row);
+      }
+    }
+    visit(row,y);
+    end=Math.max(end,y+box.height);
+    previous=row;
+  }
+  return end;
 }
 // Scale only computed horizontal separation; vertical and spacer footprints stay independent.
 function horizontalGap(gap){return gap*C.HORIZONTAL_GAP_MULT;}
@@ -491,10 +531,11 @@ function d1ColGap(colA,colB,ARM1,parent){
   const mxB=colB.length?Math.max(...colB.map(ch=>parent?structuralTitle(ch):titleWidth(ch))):0;
   return siblingPadding(Math.max(ARM1*C.D1_ARM_FLOOR_R,parent?grow(parent,(mxA+mxB)*C.D1_TXT_PAD_R):(mxA+mxB)*C.D1_TXT_PAD_R),colA.concat(colB));
 }
-function d1RowGap(nextNode,parent){return (parent?grow(parent,nextNode.baseFs*C.D1_ROW_GAP_R):nextNode.fs*C.D1_ROW_GAP_R)+nextNode.fs*thaiTierBonusFrac(nextNode.thaiTier); }
+const d1RowPadding=(node,parent)=>parent?grow(parent,node.baseFs*C.D1_ROW_GAP_R):node.fs*C.D1_ROW_GAP_R;
+const d1RowGap=(node,parent)=>d1RowPadding(node,parent)+node.fs*thaiTierBonusFrac(node.thaiTier);
 function firstRowUpwardBonus(nodes,d1Fs){
   if(!nodes.length)return 0;
-  nodes=nodes.filter(n=>n.kind!=='spacer');if(!nodes.length)return 0;
+  nodes=nodes.filter(n=>n.kind!=='spacer'&&!isPhotoOnly(n));if(!nodes.length)return 0;
   const maxTier=Math.max(...nodes.map(n=>n.thaiTier||0));
   if(nodes.some(n=>(n.mapSize??1)!==1))return Math.max(...nodes.map(n=>n.fs*((n.thaiTier||0)===3?C.THAI_TIER3_FIRSTROW_R:thaiTierBonusFrac(n.thaiTier||0))));
   const frac=maxTier===3?C.THAI_TIER3_FIRSTROW_R:thaiTierBonusFrac(maxTier);
@@ -502,28 +543,22 @@ function firstRowUpwardBonus(nodes,d1Fs){
 }
 
 /* ══ LAYOUT ══ */
-function place(node,y0){
-  if(node.subtree){node.y=y0;for(const offset of node.subtree.childOffsets)place(offset.node,y0+offset.y);return y0+node.subtree.height;}
-  node.y=y0;
-  if(node.children.length){
-    const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1;
-    const subGap=familySubGap(node);
-    let yc=y0+(stackedChildrenOffset(node,subGap,sR));
-    for(let i=0;i<node.children.length;i++){
-      const ch=node.children[i];
-      if(i>0)yc+=siblingGapDelta(ch,node.children[i-1].subtree?.lastLeafBaseFs??lastLeafFs(node.children[i-1]),node);
-      yc=place(ch,yc);
-    }
-    return yc;
-  }
-  return y0+node.fs*C.LINE_H+node.textBlock.extraHeight;
+function place(node,y){
+  node.y=y;
+  for(const offset of node.subtree.childOffsets)place(offset.node,y+offset.y);
+  return y+node.subtree.height;
 }
 function annotateNodes(node,MD){
   node.baseFs=fsz(node.depth,MD);
-  const photoOnly=node.photos&&!node.label.trim()&&node.description===undefined;
-  node.fs=node.baseFs*(photoOnly?1:node.mapSize??1);node.fw=fwt(node.depth);node.capFrac=capCFrac(node.fs,node.fw);
-  node.textBlock=measureTextBlock(node,MD);
-  measurePhotos(node,node.textBlock);
+  node.fs=node.baseFs*(isPhotoOnly(node)?1:node.mapSize??1);node.fw=fwt(node.depth);node.capFrac=capCFrac(node.fs,node.fw);
+  const block=node.textBlock=measureTextBlock(node,MD);
+  const ink=block.runs.filter(run=>run.text.trim());
+  node.textGeometry={
+    top:ink.length?Math.min(...ink.map(run=>run.baseline-run.ascent)):0,
+    bottom:ink.length?Math.max(...ink.map(run=>run.baseline+run.descent)):node.kind==='spacer'?block.bottom:0,
+    block:{bottom:block.bottom,extraHeight:block.extraHeight}
+  };
+  measurePhotos(node,block);
   node.structuralTitleWidth=node.kind==='spacer'?node.baseFs:node.fs===node.baseFs?node.textBlock.titleWidth:Math.max(...(node.titleLines??[node.label]).map(text=>mW(text,node.baseFs,node.fw)));
   node.thaiTier=node.kind==='spacer'?0:thaiHeightTier(node.label);node.hasLower=node.kind!=='spacer'&&hasThaiLower(node.label);
   node.children.forEach(ch=>annotateNodes(ch,MD));prepareFamily(node,MD);
@@ -531,19 +566,59 @@ function annotateNodes(node,MD){
 function forcesChildRow(node){
   return node.childrenInRow===true&&node.family.count>=2;
 }
+function stackSpacing(parent){
+  return (previous,next)=>siblingGapDelta(next,previous.subtree.reference?.lastLeafBaseFs??previous.baseFs,parent);
+}
+function horizontalChildrenOffset(node,children,block=node.textBlock){
+  const gap=grow(node,node.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
+  return node.fs+block.extraHeight+gap+lowerThaiChildBonus(node,gap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,familyUnit(node));
+}
+function referenceFootprint(node,horizontal,MD,textSize,stack){
+  if(!hasConnector(node))return null;
+  const own=node.textGeometry,children=node.children.filter(textFootprint);
+  const first=children[0],last=children.at(-1);
+  const result={top:own.top,bottom:own.bottom,height:node.fs*C.LINE_H+own.block.extraHeight,
+    text:true,lastLeafBaseFs:last?.subtree.reference.lastLeafBaseFs??node.baseFs};
+  if(!first)return result;
+  const step=node.layoutDepth>=1?C.CHILD_STEP_R:1,subGap=familySubGap(node);
+  const firstRef=textFootprint(first);
+  const baseGap=grow(node,node.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
+  const ownBottom=Math.max(own.block.bottom,own.bottom);
+  let y=horizontal
+    ?horizontalChildrenOffset(node,children,own.block)
+    :stackedChildrenOffset(node,subGap,step,first,own.block);
+  if(textSize){
+    const clearance=horizontal?Math.max(baseGap,familyWidth(node,first.depth,MD)*3):subGap;
+    const top=horizontal?Math.min(...children.map(child=>child.subtree.reference.top)):firstRef.top;
+    y=Math.max(y,ownBottom+clearance-Math.min(0,top));
+  }
+  const measure=(child,offset)=>{
+    const ref=textFootprint(child);
+    result.top=Math.min(result.top,offset+ref.top);
+    result.bottom=Math.max(result.bottom,offset+ref.bottom);
+    result.height=Math.max(result.height,offset+ref.height,result.bottom);
+  };
+  if(horizontal){
+    for(const child of children)measure(child,Math.max(y,own.bottom-textFootprint(child).top));
+  }else{
+    placeStack(children,Math.max(y,own.bottom-firstRef.top),stack,measure,textFootprint);
+  }
+  return result;
+}
 // One bottom-up footprint record per node; placement never remeasures descendants.
 function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=false){
   if(!reuseChildren)node.children.forEach(ch=>measureSubtree(ch,MD,nominal));
   let height=node.fs*C.LINE_H+node.textBlock.extraHeight;
   const children=node.children,offsets=[];
-  const customSize=!!node.photos||(node.mapSize??1)!==1||children.some(ch=>ch.kind!=='spacer'&&ch.subtree.customSize);
-  const ownTop=Math.min(0,...node.textBlock.runs.map(run=>run.baseline-run.ascent));
-  const ownBottom=Math.max(node.textBlock.bottom,...node.textBlock.runs.map(run=>run.baseline+run.descent));
-  let minY=node.photos?Math.min(ownTop,node.textBlock.photos[0].y):ownTop;
+  const textSize=!isPhotoOnly(node)&&(node.mapSize??1)!==1||children.some(ch=>ch.kind!=='spacer'&&ch.subtree.textSize);
+  const own=node.textGeometry,pictures=node.textBlock.photos;
+  let top=pictures?Math.min(own.top,pictures[0].y):own.top;
+  let bottom=pictures?Math.max(own.bottom,node.textBlock.bottom):own.bottom;
+  const ownBottom=Math.max(node.textBlock.bottom,own.bottom);
   const forced=forcesChildRow(node);
   const rootStack=node.layoutDepth===0&&rootChildrenStacked(node);
   const rootColumns=rootStack?rootChildColumns(children.filter(hasConnector).length):0;
-  let spine;
+  let spine,stack;
   let horizontal=forced||layoutPreferences.horizontalFamily(node);
   if(children.length){
     const alignChildren=stacked=>{
@@ -569,11 +644,17 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=f
         }
       }
       const first=offsets[0],last=offsets[offsets.length-1],center=(first.x+titleWidth(first.node)/2+last.x+titleWidth(last.node)/2)/2;
-      const childFs=familyUnit(node),baseGap=grow(node,node.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
-      let y=node.fs+node.textBlock.extraHeight+baseGap+lowerThaiChildBonus(node,baseGap)*C.LOWER_THAI_FANOUT_FRAC+firstRowUpwardBonus(children,childFs);
-      if(customSize)y=Math.max(y,ownBottom+Math.max(baseGap,familyWidth(node,children[0].depth,MD)*3)-Math.min(...children.map(ch=>ch.subtree.minY)));
+      const baseGap=grow(node,node.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
+      let y=horizontalChildrenOffset(node,children);
+      if(textSize){
+        const textChildren=children.filter(ch=>!isPhotoOnly(ch));
+        if(textChildren.length)y=Math.max(y,ownBottom+Math.max(baseGap,familyWidth(node,children[0].depth,MD)*3)-Math.min(...textChildren.map(ch=>ch.subtree.minY)));
+      }
       const centerOffset=titleWidth(node)/2-center;
-      for(const offset of offsets){offset.x+=centerOffset;offset.y=y;height=Math.max(height,y+offset.node.subtree.height);}
+      for(const offset of offsets){
+        offset.x+=centerOffset;offset.y=Math.max(y,bottom-offset.node.subtree.top);
+        height=Math.max(height,offset.y+offset.node.subtree.height);
+      }
       // Length limits are opt-in; left overhang alone is not a width limit.
       // Incoming connector clearance is checked by the vertical parent below.
       if(!forced&&layoutPreferences.lengthLimitEnabled){
@@ -584,23 +665,23 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=f
     }
     if(!horizontal){
       const sR=(node.layoutDepth??node.depth)>=1?C.CHILD_STEP_R:1,subGap=familySubGap(node);
-      let y=stackedChildrenOffset(node,subGap,sR);
+      const first=children[0],spacing=stackSpacing(node);
+      const start=Math.max(stackedChildrenOffset(node,subGap,sR),
+        textSize&&!isPhotoOnly(first)?ownBottom+subGap-first.subtree.minY:bottom-first.subtree.top);
+      stack=measureStack([children],spacing,ch=>siblingBaseGap(ch,node),textSize,sideConnectorOffset);
       spine=spineOffsetOf(node);
       // Latest owner correction: quietly stack an overwide horizontal group vertically.
       // Reserve the incoming vertical shaft corridor, including stroke and measured ink.
       // A one-column WRAP also gives first-level children this incoming shaft.
       // Forced rebuilds reuse measured children; each node is built at most twice.
-      for(let i=0;i<children.length;i++){
-        const ch=children[i];if(i)y+=siblingGapDelta(ch,children[i-1].subtree.lastLeafBaseFs,node);
+      const end=placeStack(children,start,stack,(ch,y)=>{
         // Centered own paragraphs reserve their left ink without changing title anchors within the block.
         const descriptionInset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
         // Supersedes forced vertical rebuilding: one local offset keeps eligible descendants horizontal.
         const clearance=incomingClearance(node,ch,MD,descriptionInset);
-        // Customized footprints clear actual adjacent ink; default arithmetic is unchanged.
-        if(customSize)y=i===0?Math.max(y,ownBottom+subGap-ch.subtree.minY):y-Math.min(0,ch.subtree.minY);
-        offsets.push({node:ch,x:spine+familyArm(node,ch.depth,MD)+descriptionInset+clearance,y,clearance});y+=ch.subtree.height;
-      }
-      height=Math.max(height,y);
+        offsets.push({node:ch,x:spine+familyArm(node,ch.depth,MD)+descriptionInset+clearance,y,clearance});
+      });
+      height=Math.max(height,end);
     }
   }
   // Resolve outgoing alignment after Length has chosen the final child layout.
@@ -612,8 +693,12 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=f
   alignTextBlock(block,block.leftAligned,descriptionLeft,descriptionAnchor,titleStart);
   let minX=titleStart!==null?block.minX:nominal?0:block.runs.reduce((min,run)=>Math.min(min,run.x-run.left),0);
   let maxX=titleStart!==null?Math.max(block.maxX,block.photos?block.width:0):nominal?nodeWidth(node):block.runs.reduce((max,run)=>Math.max(max,run.x+run.right),nodeWidth(node));
-  for(const offset of offsets){minY=Math.min(minY,offset.y+offset.node.subtree.minY);minX=Math.min(minX,offset.x+offset.node.subtree.minX);maxX=Math.max(maxX,offset.x+offset.node.subtree.maxX);}
-  if(customSize){
+  for(const offset of offsets){
+    const sub=offset.node.subtree;
+    top=Math.min(top,offset.y+sub.top);bottom=Math.max(bottom,offset.y+sub.bottom);
+    minX=Math.min(minX,offset.x+sub.minX);maxX=Math.max(maxX,offset.x+sub.maxX);
+  }
+  if(textSize||pictures){
     const connected=offsets.filter(offset=>offset.node.kind!=='spacer');
     if(connected.length){
       const half=familyWidth(node,connected[0].node.depth,MD)/2;
@@ -629,7 +714,10 @@ function measureSubtree(node,MD,nominal=false,reuseChildren=false,separateRoot=f
       }
     }
   }
-  node.subtree={minX,maxX,minY,height,customSize,hasHorizontalRow:horizontal&&node.family.count>1||children.some(ch=>ch.subtree.hasHorizontalRow),childMode:horizontal?'horizontal':'vertical',childOffsets:offsets,lastLeafBaseFs:children.length?children[children.length-1].subtree.lastLeafBaseFs:node.baseFs,lastLeafFs:children.length?children[children.length-1].subtree.lastLeafFs:node.fs};
+  node.subtree={minX,maxX,minY:Math.min(0,top),top,bottom,height:Math.max(height,bottom),textSize,
+    reference:referenceFootprint(node,horizontal,MD,textSize,stack),
+    hasHorizontalRow:horizontal&&node.family.count>1||children.some(ch=>ch.subtree.hasHorizontalRow),
+    childMode:horizontal?'horizontal':'vertical',childOffsets:offsets};
 }
 const isPackingAnchor = node => node.kind !== 'spacer';
 const hasConnector = node => isPackingAnchor(node) && !node.photos?.length;
@@ -649,7 +737,7 @@ function leftAbove(node,ceiling){
   return left;
 }
 function incomingClearance(parent,child,MD,inset=0){
-  if(child.kind==='spacer'||!child.subtree)return 0;
+  if(child.kind==='spacer')return 0;
   const count=parent.family.count,root=(parent.layoutDepth??parent.depth)===0&&!parent.synthetic;
   if(root&&count>1&&(layoutPreferences.hlimitInf||count<=layoutPreferences.hlimitN))return 0;
   const half=(child.incomingWidth??lnW(child.depth,MD))/2;
@@ -658,12 +746,19 @@ function incomingClearance(parent,child,MD,inset=0){
   const padding=arm*C.INCOMING_PAD_R;
   return Math.max(0,half+(child.subtree.hasHorizontalRow?horizontalGap(padding):padding)-(arm+inset+left));
 }
+function rootChildrenClearance(root,gap,y){
+  if(!root.subtree.textSize)return y;
+  const children=root.children.filter(ch=>!isPhotoOnly(ch));
+  if(!children.length)return y;
+  const bottom=Math.max(root.textBlock.bottom,root.textGeometry.bottom);
+  return Math.max(y,root.y+bottom+gap-Math.min(...children.map(ch=>ch.subtree.minY)));
+}
 function layoutSimple(root,MD,colorSeed,recolor=true){
   const d1=root.children,NC=d1.length;
   root.y=C.TOP_M;
   const d1Fs=NC?familyUnit(root):C.BASE_FONT;
   const d1TxtW=d1.map(n=>titleWidth(n));
-  const d1ColW_s=d1.map((n,i)=>Math.max(colW(n,MD),d1TxtW[i]));
+  const d1ColW_s=d1.map(footprintW);
   const units=packingUnits(d1),nextReal=new Map(units.map((u,i)=>[u.node,units[i+1]?.node]));
   const cl=[];let xc=C.LEFT_M;
   for(let i=0;i<NC;i++){
@@ -673,17 +768,18 @@ function layoutSimple(root,MD,colorSeed,recolor=true){
     const lPad=next?grow(root,structuralTitle(next)*C.D1_TXT_PAD_R):0;
     xc+=d1ColW_s[i]+(next?siblingPadding(rPad+lPad,[d1[i],next]):rPad+lPad);
   }
-  for(let i=0;i<NC;i++){d1[i].x=cl[i]-(d1[i].subtree?.minX||0);assignSubtreeX(d1[i],MD);}
+  for(let i=0;i<NC;i++){d1[i].x=cl[i]-d1[i].subtree.minX;assignSubtreeX(d1[i]);}
   for(let i=0;i<NC;i++)d1[i].cx=d1[i].x+d1TxtW[i]/2;
   const rCX=NC===0?C.LEFT_M+titleWidth(root)/2:
     NC===1?d1[0].cx:(d1[0].cx+d1[NC-1].cx)/2;
   root.cx=rCX;root.x=rCX-titleWidth(root)/2;
   if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
   const d1BaseGap=grow(root,root.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
-  let d1Y=root.y+root.fs+root.textBlock.extraHeight+d1BaseGap+lowerThaiChildBonus(root,d1BaseGap)*(NC===1?1:C.LOWER_THAI_FANOUT_FRAC);
-  if(root.subtree?.customSize&&d1.length)d1Y=Math.max(d1Y,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap-Math.min(...d1.map(ch=>ch.subtree.minY)));
+  const d1Y=rootChildrenClearance(root,d1BaseGap,root.y+root.fs+root.textBlock.extraHeight+d1BaseGap+
+    lowerThaiChildBonus(root,d1BaseGap)*(NC===1?1:C.LOWER_THAI_FANOUT_FRAC));
   const firstRowBonus=firstRowUpwardBonus(d1,d1Fs);
-  const bots=[];for(let i=0;i<NC;i++)bots.push(place(d1[i],d1Y+firstRowBonus));
+  const bottom=root.y+Math.max(root.textGeometry.bottom,root.photos?root.textBlock.bottom:0);
+  const bots=d1.map(ch=>place(ch,Math.max(d1Y+firstRowBonus,bottom-ch.subtree.top)));
   const pW=Math.max(NC?cl[NC-1]+d1ColW_s[NC-1]+(d1[NC-1].kind==='spacer'?0:grow(root,structuralTitle(d1[NC-1])*C.D1_TXT_PAD_R)):0,
     root.x+titleWidth(root))+C.RIGHT_M;
   const pH=(bots.length?Math.max(...bots):d1Y+120)+C.BOT_M;
@@ -717,16 +813,15 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
       first += count;
     }
   }
-  const placements=new Map(root.subtree?.childOffsets.map(offset=>[offset.node,offset])??[]);
+  const placements=new Map(root.subtree.childOffsets.map(offset=>[offset.node,offset]));
   const childX=ch=>{
     const clearance=placements.get(ch)?.clearance??0;
-    if(!clearance)return -(ch.subtree?.minX||0);
+    if(!clearance)return -ch.subtree.minX;
     const inset=ch.description===undefined?0:Math.max(0,-ch.textBlock.minX);
     return inset+clearance;
   };
   const colWidths=colChildren.map(chs=>ARM1+Math.max(...chs.map(ch=>{
-    const width=footprintW(ch,MD);
-    return Math.max(width,ch.kind==='spacer'?0:childX(ch)+(ch.subtree?.maxX??width));
+    return Math.max(footprintW(ch),ch.kind==='spacer'?0:childX(ch)+ch.subtree.maxX);
   })));
   const gridX0=C.LEFT_M;
   const d1ColX=[],colLabelX=[];
@@ -737,8 +832,7 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   }
   const gridX1=d1ColX[cols-1]+colWidths[cols-1];
   const d1BaseGap_g=grow(root,root.family.unit*C.GAP_R*C.D0_D1_GAP_MULT);
-  let d1Y_g=root.y+(gridChildrenOffset(root,cols,d1BaseGap_g,familyUnit(root)));
-  if(root.subtree?.customSize)d1Y_g=Math.max(d1Y_g,root.y+Math.max(root.textBlock.bottom,...root.textBlock.runs.map(run=>run.baseline+run.descent))+d1BaseGap_g-Math.min(...d1.map(ch=>ch.subtree.minY)));
+  const d1Y_g=rootChildrenClearance(root,d1BaseGap_g,root.y+gridChildrenOffset(root,cols,d1BaseGap_g,familyUnit(root)));
   const av_g=d1Y_g-root.y-root.fs-root.textBlock.extraHeight;
   const rg_g=Math.min(familyGap(root,d1[0]?.depth||1,MD),av_g*0.3);
   const rb_g=root.y+root.fs+root.textBlock.extraHeight+rg_g;
@@ -746,31 +840,21 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   const gridStartY=d1Y_g;
   const firstRowNodes=colChildren.map(chs=>chs.find(hasConnector)).filter(Boolean);
   const firstRowBonus=cols>1?firstRowUpwardBonus(firstRowNodes,d1Fs):0;
-  const colRowY=[];
-  for(let c=0;c<cols;c++){
-    let yc=gridStartY+firstRowBonus,hasReal=false;colRowY[c]=[];
-    for(let r=0;r<colChildren[c].length;r++){
-      const real=hasConnector(colChildren[c][r]);if(real&&hasReal)yc+=d1RowGap(colChildren[c][r],root);
-      if(r>0&&root.subtree?.customSize)yc-=Math.min(0,colChildren[c][r].subtree.minY);
-      colRowY[c][r]=yc;yc+=footprintH(colChildren[c][r],MD);
-      if(real)hasReal=true;
-    }
-  }
+  const spacing=(previous,ch)=>hasConnector(ch)?d1RowGap(ch,root):0;
+  const stack=measureStack(colChildren,spacing,ch=>d1RowPadding(ch,root),root.subtree.textSize,sideConnectorOffset);
   const d1Groups=[];
-  for(let c=0;c<cols;c++){
-    for(let r=0;r<colChildren[c].length;r++){
-      const ch=colChildren[c][r];
-      ch.x=colLabelX[c]+(ch.kind==='spacer'?0:childX(ch));assignSubtreeX(ch,MD);place(ch,colRowY[c][r]);
-      ch.cx=ch.x+titleWidth(ch)/2;
-      d1Groups.push({node:ch,col:c,row:r,cellX:d1ColX[c],cellY:colRowY[c][r],
-        labelX:colLabelX[c],cellW:colWidths[c],cellH:footprintH(ch,MD)});
-    }
-  }
+  const bottom=root.y+Math.max(root.textGeometry.bottom,root.photos?root.textBlock.bottom:0);
   let gridY1=gridStartY;
   for(let c=0;c<cols;c++){
-    const chs=colChildren[c];if(!chs.length)continue;
-    const bot=colRowY[c][chs.length-1]+footprintH(chs[chs.length-1],MD);
-    if(bot>gridY1)gridY1=bot;
+    const children=colChildren[c],start=Math.max(gridStartY+firstRowBonus,bottom-children[0].subtree.top);
+    let row=0;
+    const end=placeStack(children,start,stack,(ch,y)=>{
+      ch.x=colLabelX[c]+(ch.kind==='spacer'?0:childX(ch));assignSubtreeX(ch);place(ch,y);
+      ch.cx=ch.x+titleWidth(ch)/2;
+      d1Groups.push({node:ch,col:c,row:row++,cellX:d1ColX[c],cellY:y,
+        labelX:colLabelX[c],cellW:colWidths[c],cellH:ch.subtree.height});
+    });
+    gridY1=Math.max(gridY1,end);
   }
   const gridTotalW=gridX1-gridX0;
   const existingCX=gridX0+gridTotalW/2;
@@ -778,7 +862,7 @@ function layoutGrid(root,MD,colorSeed,recolor=true){
   const rCX_g=(existingCX+spineCX)/2;
   root.cx=rCX_g;root.x=rCX_g-titleWidth(root)/2;
   if(recolor){root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);}
-  if(cols===1)assignSubtreeX(root,MD);
+  if(cols===1)assignSubtreeX(root);
   let _gMaxX=root.x+titleWidth(root);
   (function _gwk(n){const rx=n.x+(n.description===undefined?nodeWidth(n):n.textBlock.maxX);if(rx>_gMaxX)_gMaxX=rx;n.children.forEach(_gwk);})(root);
   return{root,MD,pW:_gMaxX+C.RIGHT_M,pH:gridY1+C.BOT_M,d1Y:gridStartY,
@@ -806,15 +890,10 @@ function layout(root,colorSeed){
   const roots=root.synthetic?root.children:[root],logical=(n,d)=>{n.layoutDepth=d;n.children.forEach(ch=>logical(ch,d+1));};
   roots.forEach(n=>logical(n,0));
   const MD=visualMaxD(root);annotateNodes(root,MD);
-  const described=hasDescription(root),multiline=!!sourceTitleLines?.some(count=>count>1),presented=!!sourcePresentation?.some(p=>p.kind==='spacer'||p.mapSize!==1||p.photos);
-  const separateRoots=root.synthetic&&root.family.count>1;
+  const described=hasDescription(root),separateRoots=root.synthetic&&root.family.count>1;
   // Spacer-only footprints retain the original nominal widths of unaffected real branches.
-  const measureAll=layoutPreferences.levelsEnabled||described||multiline||presented;
-  if(measureAll||sourcePresentation?.some(p=>p.childrenInRow)){
-    const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&p.mapSize!==1);
-    const hasForcedRow=n=>forcesChildRow(n)||n.children.some(hasForcedRow);
-    for(const n of roots)if(measureAll||hasForcedRow(n))measureSubtree(n,MD,nominal,false,separateRoots);
-  }
+  const nominal=!layoutPreferences.levelsEnabled&&!described&&!sourcePresentation?.some(p=>p.kind!=='spacer'&&!p.photos&&p.mapSize!==1);
+  for(const n of roots)measureSubtree(n,MD,nominal,false,separateRoots);
   if(!root.synthetic)return layoutTree(root,MD,colorSeed);
   // Color once in original whole-map order; outer packing only translates complete trees.
   root.col=hsl(220,.10,.17);assignColors(root,220,0,0,colorSeed);
@@ -824,9 +903,12 @@ function layout(root,colorSeed){
   else{
     const cols=layoutPreferences.rootEnabled?Math.min(layoutPreferences.rootEffective,units.length):units.length;
     const across=layoutPreferences.rootEnabled&&layoutPreferences.rootOrder==='across';
+    const footprint=(height,text)=>({top:0,bottom:height,height,reference:{top:0,bottom:height,height,text}});
     const cells=units.map(u=>{
       const items=[...u.before,u.node,...u.after].map(n=>indexes.get(n));
-      return{items,w:across?items.reduce((v,i)=>v+boxes[i].w,0):Math.max(...items.map(i=>boxes[i].w)),h:across?Math.max(...items.map(i=>boxes[i].h)):items.reduce((v,i)=>v+boxes[i].h,0)};
+      const w=across?items.reduce((v,i)=>v+boxes[i].w,0):Math.max(...items.map(i=>boxes[i].w));
+      const h=across?Math.max(...items.map(i=>boxes[i].h)):items.reduce((v,i)=>v+boxes[i].h,0);
+      return {items,w,node:u.node,subtree:footprint(h,!isPhotoOnly(u.node))};
     });
     const placeCell=(cell,x,y)=>{for(const i of cell.items){const box=boxes[i];translateLayout(trees[i],x+(across?0:(cell.w-box.w)/2)-box.x,y-box.y);if(across)x+=box.w;else y+=box.h;}};
     if(across){
@@ -839,22 +921,35 @@ function layout(root,colorSeed){
         xs[c]=xs[c-1]+widths[c-1]+gap;
       }
       const gridWidth=xs[cols-1]+widths[cols-1]-C.LEFT_M;
-      let y=C.TOP_M;
-      rows.forEach((row,r)=>{
-        const left=xs[0]+(widths[0]-cells[row[0]].w)/2,last=row.length-1;
-        const right=xs[last]+(widths[last]+cells[row[last]].w)/2;
-        const shift=row.length<cols?C.LEFT_M+gridWidth/2-(left+right)/2:0;
-        for(const [c,i]of row.entries())placeCell(cells[i],xs[c]+(widths[c]-cells[i].w)/2+shift,y);
-        y+=Math.max(...row.map(i=>cells[i].h));
-        if(r+1<rows.length)y+=Math.max(...rows[r+1].map(i=>d1RowGap(units[i].node)));
+      const bands=rows.map(row=>{
+        const members=row.map(i=>cells[i]),text=members.filter(cell=>cell.subtree.reference.text);
+        return {members,text,subtree:footprint(Math.max(...members.map(cell=>cell.subtree.height)),text.length>0)};
+      });
+      const spacing=(previous,band)=>Math.max(...(band.text.length?band.text:band.members).map(cell=>d1RowGap(cell.node)));
+      const minimum=band=>Math.min(...band.text.map(cell=>d1RowPadding(cell.node)));
+      const stack=measureStack([bands],spacing,minimum);
+      placeStack(bands,C.TOP_M,stack,({members},y)=>{
+        const last=members.length-1,left=xs[0]+(widths[0]-members[0].w)/2;
+        const right=xs[last]+(widths[last]+members[last].w)/2;
+        const shift=members.length<cols?C.LEFT_M+gridWidth/2-(left+right)/2:0;
+        members.forEach((cell,c)=>placeCell(cell,xs[c]+(widths[c]-cell.w)/2+shift,y));
       });
     }else{
       const base=Math.floor(units.length/cols),extra=units.length%cols;
-      let index=0,x=C.LEFT_M;
+      const columns=[];
+      let index=0;
       for(let c=0;c<cols;c++){
-        const size=base+(c<extra?1:0),end=index+size,width=Math.max(...cells.slice(index,end).map(cell=>cell.w));let y=C.TOP_M;
-        for(;index<end;index++){const cell=cells[index];placeCell(cell,x+(width-cell.w)/2,y);y+=cell.h;if(index+1<end)y+=d1RowGap(units[index+1].node);}
-        if(c+1<cols)x+=width+d1ColGap([units[end-1].node],[units[end].node],armLen(units[end].node.depth,MD));
+        const end=index+base+(c<extra?1:0);
+        columns.push(cells.slice(index,end));index=end;
+      }
+      const spacing=(previous,cell)=>d1RowGap(cell.node);
+      const stack=measureStack(columns,spacing,cell=>d1RowPadding(cell.node));
+      let x=C.LEFT_M;
+      for(const [c,column] of columns.entries()){
+        const width=Math.max(...column.map(cell=>cell.w));
+        placeStack(column,C.TOP_M,stack,(cell,y)=>placeCell(cell,x+(width-cell.w)/2,y));
+        const next=columns[c+1]?.[0].node;
+        if(next)x+=width+d1ColGap([column.at(-1).node],[next],armLen(next.depth,MD));
       }
     }
   }
@@ -929,7 +1024,7 @@ function getConnSegments(lay){
         :stackedChildrenOffset(parent,unit*C.SUB_GAP_R*step,step));
     }
     const start=bottom+(rowY-bottom)*C.VG_FRAC*(rootColumn?0.4:1);
-    seg(parent.col,lw,x,start,x,lastChild.y+lastChild.fs*lastChild.capFrac);
+    seg(parent.col,lw,x,start,x,sideConnectorY(lastChild));
     return x;
   };
   const branchSegments=p=>{
@@ -940,7 +1035,7 @@ function getConnSegments(lay){
       const bottom=p.y+Math.max(p.textBlock.bottom,p.textBlock.runs[0].baseline+p.textBlock.runs[0].descent);
       const inkTop=ch=>ch.y+ch.textBlock.runs[0].baseline-ch.textBlock.runs[0].ascent;
       const top=Math.min(...children.map(inkTop)),gap=top-bottom,rg=Math.min(familyGap(p,depth,MD),gap*0.3);
-      const clearance=p.subtree.customSize?familyWidth(p,depth,MD)/2+1e-9:0;
+      const clearance=p.subtree.textSize?familyWidth(p,depth,MD)/2+1e-9:0;
       const start=bottom+Math.max(rg,clearance),bus=start+(top-start)*C.BUS_MID,center=p.x+titleWidth(p)/2,lw=familyWidth(p,depth,MD);
       const centers=children.map(ch=>ch.x+titleWidth(ch)/2);
       const ends=children.map(ch=>{
@@ -958,7 +1053,7 @@ function getConnSegments(lay){
     const sx=stackedSpine(p,connected[connected.length-1],familyWidth(p,p.depth+1,MD));
     for(const {node:ch,clearance=0} of p.subtree?.childOffsets??connected.map(node=>({node}))){
       if(!hasConnector(ch))continue;
-      const cy=ch.y+ch.fs*ch.capFrac;
+      const cy=sideConnectorY(ch);
       seg(p.col,familyWidth(p,ch.depth,MD),sx,cy,sx+familyArm(p,ch.depth,MD)*0.70+clearance,cy);
     }
   };
@@ -991,7 +1086,7 @@ function getConnSegments(lay){
     if(d1Cols===1){
       const sx=stackedSpine(root,d1[d1.length-1],lw1,true);
       for(const ch of d1){
-        const ey=ch.y+ch.fs*ch.capFrac;
+        const ey=sideConnectorY(ch);
         seg(root.col,lw1,sx,ey,ch.x-familyArm(root,ch.depth,MD)*0.30,ey);
       }
     }else{
@@ -1005,10 +1100,11 @@ function getConnSegments(lay){
         const shaftX=d1ColX[c];
         const colGs=connectedGroups.filter(group=>group.col===c);if(!colGs.length)continue;
         const lastCh=colGs[colGs.length-1].node;
-        seg(root.col,lw1,shaftX,d1BusY,shaftX,lastCh.y+lastCh.fs*lastCh.capFrac);
+        seg(root.col,lw1,shaftX,d1BusY,shaftX,sideConnectorY(lastCh));
         for(const g of colGs){
           const ch=g.node;
-          seg(root.col,lw1,shaftX,ch.y+ch.fs*ch.capFrac,ch.x-familyArm(root,ch.depth,MD)*0.30,ch.y+ch.fs*ch.capFrac);
+          const y=sideConnectorY(ch);
+          seg(root.col,lw1,shaftX,y,ch.x-familyArm(root,ch.depth,MD)*0.30,y);
         }
       }
     }
@@ -1819,11 +1915,31 @@ function setSearchQuery(query){
   if(destroyed)return;query=String(query??'').trim();if(query===searchQuery)return;
   searchQuery=query;highlightCache=null;if(!paused)redraw();
 }
+function defaultPhotoHeight(node, localCapHeight) {
+  const depth = Math.max(1, node.depth);
+  const scale = layoutPreferences.branchScale;
+  if (scale === DEFAULT_BRANCH_SCALE) return 3 * depth * localCapHeight;
+
+  // Interpolate in log scale, with limited extra compensation above the default.
+  const progress = Math.log(scale) / Math.log(DEFAULT_BRANCH_SCALE);
+  const extra = Math.max(0, progress - 1);
+  const extraCompensationLimit = 0.25;
+  const strength = Math.min(1, progress) + extraCompensationLimit * extra / (extraCompensationLimit + extra);
+  const depthMultiplier = 6 * Math.pow(depth / 2, strength);
+
+  if (scale > DEFAULT_BRANCH_SCALE) return depthMultiplier * localCapHeight;
+  const referenceInk = inkMetrics('H', C.BASE_FONT, 'normal');
+  const referenceHeight = (referenceInk.ascent + referenceInk.descent) * (node.baseFs / C.BASE_FONT);
+  const capHeight = scale === MIN_BRANCH_SCALE
+    ? referenceHeight
+    : referenceHeight * Math.pow(localCapHeight / referenceHeight, strength);
+  return depthMultiplier * capHeight;
+}
+
 function measurePhotos(node, block) {
   if (!node.photos?.length) return;
   const ink = inkMetrics('H', node.baseFs, node.fw);
-  const depthMultiplier = 3 * Math.max(1, node.depth);
-  const height = depthMultiplier * (ink.ascent + ink.descent) * Math.min(4, node.mapSize ?? 1);
+  const height = defaultPhotoHeight(node, ink.ascent + ink.descent) * Math.min(4, node.mapSize ?? 1);
   // Anchor to ordinary title ink and retain the center used by layout clearance.
   const gap = height / 12, y = node.fs * C.BASELINE_FRAC - ink.ascent;
   node.capFrac = (y + height / 2) / node.fs;
@@ -2253,5 +2369,5 @@ if(opts.settings)setSettings(opts.settings);
 if(!ownsFont)loadFonts();
 return{setText,fit,getSettings,setSettings,exportPDF,resetView,destroy,setViewportInsets,getSettingBounds,setChromeOcclusion,setColorSeed,setSearchQuery};
 }
-window.MindMap={version:'1.20.2',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','pdf-prepare-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
+window.MindMap={version:'1.20.6',apiVersion:1,capabilities:['text-input','photo-attachments-v1','node-title-lines','viewport-fit','settings-v1','pdf-export','pdf-photo-export-v1','pdf-prepare-v1','reset-view','placeholderNodes','viewport-insets','settings-bounds','chrome-occlusion','live-viewport-fit','color-seed-only','node-descriptions','branch-layout-v1','branch-layout-v2','root-layout-v1','root-order-v1','branch-scale-v1','branch-length-limit-v1','canvas-interaction-v1','search-highlight-v1','node-presentation-v1','node-presentation-v2','node-presentation-v3','confirmed-single-tap-v1','outline-reveal-v1'],mount};
 })();
