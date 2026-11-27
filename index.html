@@ -178,8 +178,8 @@ if(ipadSafariShell)document.documentElement.classList.add('ipad-safari-shell');
    Relative sources get an encoded v query. Absolute HTTPS pins stay unchanged.
    A tag or full commit is a pin; @main/@latest is floating. No fallback version. */
 const MODULES = {
-  outliner: { src: './outliner.js', v: '1.23.3' },
-  mindmap: { src: './mindmap.js', v: '1.20.6' }
+  outliner: { src: './outliner.js', v: '1.24.1' },
+  mindmap: { src: './mindmap.js', v: '1.21.8' }
 };
 // BEGIN SYNC FILTER
 const effectiveMapFocus=(syncFocus,pinned,focus)=>pinned??(syncFocus?focus:null);
@@ -425,6 +425,7 @@ function createMapFocusController(){
   }
   function apply(value){
     if(value?.kind!=='map-focus'||!valid(value.state))return false;
+    cancelNodeZoom();
     state={syncFocus:value.state.syncFocus,pinnedId:value.state.pinnedId};
     updateFit();
     write('moa:map:focusState',state);present();scheduleSync();return true;
@@ -458,6 +459,7 @@ function createMapFocusController(){
   function updateFit(){
     const next=effectiveMapFocus(state.syncFocus,state.pinnedId,outlineFocusId);
     if(next===mapFocusId)return;
+    cancelNodeZoom();
     mapFocusId=next;
     generation++;
     fitIntent={projection:null,dispatch:null};
@@ -567,16 +569,25 @@ function presentationTransport(values){
   if(supports('node-presentation-v1','setText'))return values.map(p=>({...p,mapSize:Math.round(Math.max(.1,Math.min(10,p.mapSize))*100)/100}));
   return undefined;
 }
-function flushSync(revealing=false) {
+function readProjection(){
+  return projectOutline(outline.getSnapshot({titleLines:true, focusExpansion}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v3','setText')||supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'),sharedFocusCollapse);
+}
+function flushSync(revealing=false, requestedProjection) {
   flushSearch(revealing);
   if(seedHistory.enabled&&seedHistory.dirty)seedHistory.queueSeedDelivery();
-  if(!dirty){mapFocus.flushFit();return true;}
+  if(!dirty&&!requestedProjection){mapFocus.flushFit();flushNodeZoom();return true;}
   if(!outline||!supports('text-input','setText')||!mapVisible()&&!revealing)return false;
   const generation=++projectionGeneration,currentMap=map,focusGeneration=mapFocus.generation;
   const current=()=>generation===projectionGeneration&&map===currentMap;
-  const failed=error=>{if(current())dirty=true;report(/compatibility error/i.test(errorText(error))?'Mind Map compatibility':'Mind Map',error);return false;};
+  const failed=error=>{
+    if(current()){
+      dirty=true;
+      if(nodeZoom?.armed)finishNodeZoom('Could not zoom to this node.');
+    }
+    report(/compatibility error/i.test(errorText(error))?'Mind Map compatibility':'Mind Map',error);return false;
+  };
   try {
-    const projection=projectOutline(outline.getSnapshot({titleLines:true, focusExpansion}),syncCollapse,mapFocus.value.syncFocus,mapFocus.value.pinnedId,supports('node-presentation-v3','setText')||supports('node-presentation-v2','setText')||supports('node-presentation-v1','setText'),sharedFocusCollapse);
+    const projection=requestedProjection??readProjection();
     const {text}=projection;
     if(projection.nodeTitleLines.some(count=>count>1)&&!supports('node-title-lines','setText'))throw new Error('Mind Map compatibility error: multiline titles require a node-title-lines capable module. Reload the matching app files.');
     const nodeTitleLines=supports('node-title-lines','setText')?projection.nodeTitleLines:undefined;
@@ -589,7 +600,7 @@ function flushSync(revealing=false) {
     const signature=JSON.stringify([text,nodeIds,placeholderNodes,nodeTexts,outlineStats,nodePresentation,nodeHasChildren,nodeTitleLines]);
     const completed=()=>{
       if(!current())return false;
-      dirty=false;mapFocus.acknowledge(focusGeneration,signature);mapFocus.flushFit();
+      dirty=false;mapFocus.acknowledge(focusGeneration,signature);mapFocus.flushFit();acceptNodeZoom(projection.nodeIds);
       return true;
     };
     const delivered=()=>{
@@ -613,12 +624,88 @@ function flushSync(revealing=false) {
 }
 function scheduleSync() {
   projectionGeneration++;dirty=true;
-  if(!mapVisible() || syncFrame!==null)return;
-  syncFrame=requestAnimationFrame(()=>{syncFrame=null;flushSync();});
+  if((!mapVisible()&&!nodeZoom?.armed)||syncFrame!==null)return;
+  syncFrame=requestAnimationFrame(()=>{syncFrame=null;flushSync(!!nodeZoom?.armed);});
 }
 function setSyncCollapse(enabled) {
   if(syncCollapse===enabled)return;
+  cancelNodeZoom();
   syncCollapse=enabled;write('moa:syncCollapse',syncCollapse);syncButtons();scheduleSync();
+}
+let nodeZoom=null;
+function cancelNodeZoom(){
+  nodeZoom=null;
+  if(supports('zoom-to-node-v1','cancelNodeZoom'))mapCall('cancelNodeZoom');
+}
+function finishNodeZoom(message){
+  nodeZoom=null;
+  showAppNotice(message);
+}
+function acceptNodeZoom(projectedIds){
+  const intent=nodeZoom;
+  if(!intent?.armed||intent.map!==map||document.hidden)return;
+  if(!projectedIds.includes(intent.id)){
+    finishNodeZoom('This node isn’t visible in the current Mind Map.');return;
+  }
+  intent.ready=true;
+  if(covered)selectPane(narrowPortrait?'collapsed':'split',false,intent);
+  flushNodeZoom();
+}
+function flushNodeZoom(){
+  const intent=nodeZoom;
+  if(!intent?.ready||intent.dispatched||dirty||settingsPending||document.hidden||!mapVisible()||
+      !viewportReady||viewportLeft>=W||geometryTarget||drag)return;
+  // Pane geometry commits can precede the chrome rectangles within the same turn.
+  intent.dispatched=true;
+  queueMicrotask(()=>{
+    if(nodeZoom!==intent||map!==intent.map)return;
+    if(dirty||settingsPending||document.hidden||!mapVisible()||!viewportReady||viewportLeft>=W||geometryTarget||drag){
+      intent.dispatched=false;return;
+    }
+    try{showNodeOnMap(intent);}
+    catch(error){report('Mind Map navigation',error);finishNodeZoom('Could not zoom to this node.');}
+  });
+}
+function showNodeOnMap(intent){
+  const controls=$('map-more').parentElement;
+  const short=controls.classList.contains('short-controls');
+  const occlusions=[
+    [short?controls:$('map-more'),short?'right':'top'],
+    [$('corner-toggle'),'top']
+  ].filter(([element])=>!element.hidden&&!element.inert&&getComputedStyle(element).visibility==='visible')
+    .map(([element,edge])=>({rect:element.getBoundingClientRect(),edge}));
+  const complete=result=>{
+    if(nodeZoom!==intent||map!==intent.map)return;
+    nodeZoom=null;
+    if(result==='missing')showAppNotice('This node isn’t visible in the current Mind Map.');
+    else if(result==='no-space')showAppNotice('There isn’t enough visible space to frame this node.');
+    else if(result!=='shown')showAppNotice('Could not zoom to this node.');
+  };
+  const result=mapCall('zoomToNode',intent.id,{occlusions});
+  if(result&&typeof result.then==='function')result.then(complete).catch(error=>report('Mind Map',error));
+  else complete(result);
+}
+function requestNodeZoom({nodeId}){
+  if(!Number.isSafeInteger(nodeId)||document.hidden||!supports('zoom-to-node-v1','zoomToNode'))return;
+  cancelNodeZoom();
+  if(!$('map-options').hidden)closeOptions();
+  const intent=nodeZoom={id:nodeId,map,armed:false,ready:false,dispatched:false};
+  const current=()=>nodeZoom===intent&&map===intent.map&&!document.hidden;
+  // A pending editor notification can lag behind the current row contents.
+  queueMicrotask(()=>{
+    if(!current())return;
+    try{
+      const projection=readProjection();
+      if(!projection.nodeIds.includes(nodeId)){
+        finishNodeZoom('This node isn’t visible in the current Mind Map.');return;
+      }
+      if(W<=0||H<=0){finishNodeZoom('There isn’t enough visible space to frame this node.');return;}
+      mapFocus.cancelFit();
+      cancelAnimationFrame(syncFrame);syncFrame=null;
+      intent.armed=true;
+      flushSync(true,projection);
+    }catch(error){report('Mind Map navigation',error);if(current())finishNodeZoom('Could not zoom to this node.');}
+  });
 }
 function syncButtons() {
   $('sync-collapse').setAttribute('aria-pressed',String(syncCollapse));
@@ -645,7 +732,7 @@ function applyWidth(value) {
 let dismissTimer=null,dismissGeneration=0;
 function cancelDismissal(){clearTimeout(dismissTimer);dismissTimer=null;dismissGeneration++;}
 function canvasInteraction(value){
-  if(mapVisible()&&!document.hidden)mapFocus.cancelFit();
+  if(mapVisible()&&!document.hidden){cancelNodeZoom();mapFocus.cancelFit();}
   cancelDismissal();
   if(value?.kind==='reveal'){
     if(mapVisible()&&!document.hidden&&window.Outliner?.capabilities.includes('outline-reveal-v1')){
@@ -708,11 +795,17 @@ function storeWidth(value,preferred=value/W) {fraction=preferred;try{localStorag
 function commitViewport(left,duration,live=false) {
   viewportLeft=left;viewportReady=false;
   const generation=++viewportGeneration,currentMap=map;
-  const completed=()=>{if(generation===viewportGeneration&&map===currentMap){viewportReady=true;mapFocus.flushFit();}};
+  const completed=()=>{if(generation===viewportGeneration&&map===currentMap){viewportReady=true;mapFocus.flushFit();flushNodeZoom();}};
+  const failed=error=>{
+    if(generation===viewportGeneration&&map===currentMap&&nodeZoom){
+      cancelNodeZoom();showAppNotice('Could not zoom to this node.');
+    }
+    report('Mind Map',error);
+  };
   try{
     const result=supports('viewport-insets','setViewportInsets')?currentMap.setViewportInsets({left,top:0,right:0,bottom:0},{duration,live:live&&supports('live-viewport-fit','setViewportInsets')}):undefined;
-    if(result&&typeof result.then==='function')Promise.resolve(result).then(completed).catch(error=>report('Mind Map',error));else completed();
-  }catch(error){report('Mind Map',error);}
+    if(result&&typeof result.then==='function')Promise.resolve(result).then(completed).catch(failed);else completed();
+  }catch(error){failed(error);}
 }
 function layout(duration=0,easing='ease',commit=true) {
   if(W<=0||H<=0)return;
@@ -734,7 +827,8 @@ function layout(duration=0,easing='ease',commit=true) {
   }
   measureBrand();
 }
-function selectPane(next,animate=true) {
+function selectPane(next,animate=true, zoomIntent=null) {
+  if(!zoomIntent||nodeZoom!==zoomIntent)cancelNodeZoom();
   clearDrag();lastTap=null;interruptGeometry();closePaneMenus();
   const previous=mode;mode=next;
   const toggle=next==='collapsed'||previous==='collapsed';
@@ -837,6 +931,7 @@ function animateGeometry(width,left,duration,targetMode,easing='easeOut3',commit
   widthFrame=requestAnimationFrame(step);
 }
 function animateWidth(target,duration=200,targetMode='split'){
+  cancelNodeZoom();
   animateGeometry(target<O?O:target,target<O?target-O:0,duration,targetMode);
 }
 function resetDivider(){
@@ -847,6 +942,7 @@ divider.addEventListener('pointerdown',event=>{
   const panel=$('map-options'),pr=panel.getBoundingClientRect();
   if(!panel.hidden&&event.clientX>=pr.left&&event.clientX<=pr.right&&event.clientY>=pr.top&&event.clientY<=pr.bottom)return;
   event.preventDefault();
+  cancelNodeZoom();
   const resume=geometryTarget?{...geometryTarget}:null;
   const current=interruptGeometry();
   // Repeating the committed rectangle cancels an older fit without computing a new target.
@@ -912,7 +1008,8 @@ document.addEventListener('pointerdown',event=>{
   if(!event.target.closest('.map-controls,#divider,.pane-action,#corner-toggle'))closeOptions();
 });
 for(const type of ['keydown','input','wheel','touchstart'])$('map-options').addEventListener(type,cancelDismissal,{passive:true});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelDismissal();mapFocus.suspendFit();}else mapFocus.flushFit();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelDismissal();cancelNodeZoom();mapFocus.suspendFit();}else mapFocus.flushFit();});
+document.addEventListener('click',event=>{if(event.target.closest('#mm-btn-rst'))cancelNodeZoom();},true);
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('map-options').hidden){closeOptions();if(eligibleTarget($('map-more'),Math.max(0,displayedGeometry().width+displayedGeometry().left)))$('map-more').focus();}});
 const numericFields=new Map(),legacyComposing=new Set();
 let blockedNumberAction=null;
@@ -931,7 +1028,7 @@ $('map-options').addEventListener('click',event=>{
 },true);
 $('scale-reset').addEventListener('click',()=>stepNumber('branch-scale',0,2.5));
 $('length-enabled').addEventListener('change',()=>{if(!$('length-enabled').disabled)changeSettings({lengthLimit:{enabled:$('length-enabled').checked}});});
-function changeSettings(partial) {flushSync();settingsPending=false;persistSettings(mapCall('setSettings',partial));}
+function changeSettings(partial) {cancelNodeZoom();flushSync();settingsPending=false;persistSettings(mapCall('setSettings',partial));}
 for(const order of ['down','across'])$('root-order-'+order).addEventListener('change',event=>{if(event.target.checked&&!event.target.disabled)changeSettings({rootLayout:{order}});});
 $('root-enabled').addEventListener('change',()=>{if(!$('root-enabled').disabled)changeSettings({rootLayout:{enabled:$('root-enabled').checked}});});
 $('hlimit-enabled').addEventListener('change',()=>{if(!$('hlimit-enabled').disabled)changeSettings({horizontalLimit:{enabled:$('hlimit-enabled').checked}});});
@@ -1031,7 +1128,7 @@ $('random-color').addEventListener('click',()=>{
   if(seedHistory.enabled){if(!seedHistory.settleSeedDraft())return;seedHistory.commitSeed(Math.floor(Math.random()*0xFFFFFF),true);}
   else changeSettings({colorSeed:Math.floor(Math.random()*0xFFFFFF)});
 });
-function showPdfNotice(message){
+function showAppNotice(message){
   if(outline&&window.Outliner.capabilities.includes('toast-v1')&&typeof outline.showToast==='function')outline.showToast(message);
   else report('Mind Map',message);
 }
@@ -1067,7 +1164,7 @@ savePdf.addEventListener('click',async event=>{
   }catch(error){
     if(preparedPdf!==current||error?.name==='AbortError')return;
     current.tryShare=false;
-    showPdfNotice('Could not open sharing. Tap Save PDF again, or open the PDF and use Share to save it.');
+    showAppNotice('Could not open sharing. Tap Save PDF again, or open the PDF and use Share to save it.');
   }
 });
 $('download-pdf').addEventListener('click',async event=>{
@@ -1082,13 +1179,13 @@ $('download-pdf').addEventListener('click',async event=>{
     const ready=sync&&typeof sync.then==='function'?await sync:sync;
     if(!ready||map!==instance)return;
     if(appleMobilePdf&&supports('pdf-prepare-v1','exportPDF')){
-      const file=await instance.exportPDF({onWarning:showPdfNotice,prepareOnly:true});
+      const file=await instance.exportPDF({onWarning:showAppNotice,prepareOnly:true});
       if(file&&map===instance)showPreparedPdf(file);
-    }else if(supports('pdf-photo-export-v1','exportPDF'))await instance.exportPDF({onWarning:showPdfNotice});
+    }else if(supports('pdf-photo-export-v1','exportPDF'))await instance.exportPDF({onWarning:showAppNotice});
     else await instance.exportPDF();
     if(map===instance)refreshSettings();
   }catch(error){
-    if(map===instance)showPdfNotice('PDF export failed: '+errorText(error));
+    if(map===instance)showAppNotice('PDF export failed: '+errorText(error));
   }finally{button.disabled=false;}
 });
 let numericFactory=null,seedAdjustmentToken=null,scalePreview=null,scalePreviewTimer=null,lastScalePreview=0;
@@ -1177,7 +1274,7 @@ async function start() {
       outline=module.mount(outlineHost,{...toastOptions,...paneOptions});
     }
     if(seedHistory.enabled)$('color-seed').value=seedHistory.display;
-    const destroy=outline.destroy;outline.destroy=()=>{numericHolds.splice(0).forEach(b=>b.dispose());numericFields.clear();seedHistory.dispose();destroy();};
+    const destroy=outline.destroy;outline.destroy=()=>{cancelNodeZoom();numericHolds.splice(0).forEach(b=>b.dispose());numericFields.clear();seedHistory.dispose();destroy();};
     const hasPin=module.capabilities.includes('pin-focus-menu-v1')&&module.capabilities.includes('outline-focus-history-v1')&&seedHistory.enabled&&typeof outline.setPinnedFocus==='function';
     if(hasPin)outline.on('pinFocus',mapFocus.request);
     mapFocus.initialize(outline.getSnapshot({titleLines:true}),hasPin);
@@ -1196,8 +1293,13 @@ async function start() {
   } catch(error) {if(!seedHistory.enabled)seedHistory.dispose();report('Outliner',new Error('Outliner could not load; editing is unavailable or live sync could not start. '+error.message));if(!outline){mode='collapsed';layout();}}
   try {
     mapModule=await loadModule('mindmap','MindMap');map=mapModule.mount($('map-host'),{...(mapModule.capabilities.includes('photo-attachments-v1')&&typeof outline.acquirePhoto==='function'?{acquirePhoto:outline.acquirePhoto}:{}),...(mapModule.capabilities.includes('canvas-interaction-v1')?{onCanvasInteraction:canvasInteraction}:{}),onError:error=>{dirty=true;if(seedHistory.enabled)seedHistory.markDirty();report('Mind Map',error);}});
-    if(map&&typeof map.destroy==='function'){const instance=map,destroy=map.destroy;map.destroy=()=>{cancelDismissal();mapFocus.cancelFit();projectionGeneration++;if(map===instance){clearPreparedPdf();map=null;}destroy();};}
+    let unsubscribeZoom;
+    if(map&&typeof map.destroy==='function'){const instance=map,destroy=map.destroy;map.destroy=()=>{unsubscribeZoom?.();cancelNodeZoom();cancelDismissal();mapFocus.cancelFit();projectionGeneration++;if(map===instance){clearPreparedPdf();map=null;}destroy();};}
     if(!map || !supports('text-input','setText'))throw new Error('Mind Map text-input capability/method is missing');
+    if(outline&&window.Outliner?.capabilities.includes('zoom-to-node-v1')&&supports('zoom-to-node-v1','zoomToNode')&&
+        supports('zoom-to-node-v1','cancelNodeZoom')&&supports('outline-reveal-v1','setText')&&supports('viewport-insets','setViewportInsets')){
+      unsubscribeZoom=outline.on('zoomToNode',requestNodeZoom);
+    }
     const hasSettings=supports('settings-v1','getSettings')&&supports('settings-v1','setSettings'),hasPDF=supports('pdf-export','exportPDF');
     const hasSeed=hasSettings&&(!seedHistory.enabled||supports('color-seed-only','setColorSeed'));
     for(const id of ['random-color','color-seed'])$(id).closest('.option-row').hidden=!hasSeed;

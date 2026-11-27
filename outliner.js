@@ -1,4 +1,4 @@
-/* Outliner version 1.23.3 | apiVersion 1. Classic, single-instance mountable module. */
+/* Outliner version 1.24.1 | apiVersion 1. Classic, single-instance mountable module. */
 (function () {
 // One DOM-only numeric lifecycle, shared by the editor and optional shell adapters.
 function createNumericStepper(config){
@@ -892,7 +892,7 @@ ${menuSeparator}</div>
 <button data-a="expandAll">Expand All</button><button data-a="collapseAll">Collapse All</button><div class="depth-controls" title="Current focused branch; direct children are level 1."><div class="depth-row"><label for="ol-depth">Expand to Level</label><div class="depth-stepper"><button id="ol-depth-down" aria-label="Decrease Expansion Level">‹</button><input id="ol-depth" type="number" inputmode="numeric" min="1" step="1" value="1"><button id="ol-depth-up" aria-label="Increase Expansion Level">›</button></div></div></div>${menuSeparator}
 ${textMenuActions([['visible', ' Visible'], ['focus', ' Focus'], ['all', ' All']])}${menuSeparator}<button data-a="clearAll">Clear All</button></div>
 <div class="menu" id="ol-menu"><button data-a="importFile" hidden>Import File</button><div class="sep" data-group="import" role="separator" hidden></div>
-<button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange Children in 1 Row</button>${menuSeparator}<button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button type="button" data-a="addPhoto" hidden>Add Photo</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button>${menuSeparator}<button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div>
+<button type="button" data-a="zoomToNode" hidden>Zoom to Node</button><button data-a="pinFocus">Pin Focus</button><div class="sep" data-group="pin" role="separator"></div><div class="size-header"><label class="size-label" for="ol-map-size">Map Size</label></div><div class="size-controls"><div class="size-stepper"><button id="ol-size-down" aria-label="Decrease Map Size">‹</button><input id="ol-map-size" aria-label="Map Size" type="number" inputmode="decimal" min="0.1" max="1000" step="0.01" value="1.00"><button id="ol-size-up" aria-label="Increase Map Size">›</button></div><button id="ol-size-reset">Reset</button></div><label class="size-scope"><input id="ol-size-subtree" type="checkbox">Include Subtree</label><button type="button" class="child-row-toggle" aria-pressed="false" hidden>Arrange Children in 1 Row</button>${menuSeparator}<button data-a="removeSpacer" hidden>Unmark as Spacer</button><button data-a="description" hidden>Insert Description</button><button type="button" data-a="addPhoto" hidden>Add Photo</button><button data-a="spacer" aria-keyshortcuts="Alt+Enter">Mark as Spacer</button>${menuSeparator}<button data-a="expand">Expand All</button><button data-a="collapse">Collapse All</button><div class="sep" data-group="branches" role="separator"></div>
 ${textMenuActions([['visible', ' Visible'], ['node', '']])}${menuSeparator}<button data-a="delete">Delete</button></div>
 <input id="ol-import-file" type="file" accept=".txt,.zip,text/plain,application/zip" hidden>
 <input id="ol-photo-file" type="file" accept="image/*" multiple hidden>
@@ -1106,7 +1106,7 @@ function destroy() {
 }
 
 // Integration API only. Original persistence/history and editing decisions remain below.
-const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus', 'search', 'expansionLevel', 'focusExpansion'].map(event => [event, new Set()]));
+const subscribers = new Map(['change', 'toggle', 'zoom', 'paneAction', 'pinFocus', 'zoomToNode', 'search', 'expansionLevel', 'focusExpansion'].map(event => [event, new Set()]));
 let publicationReady = false, publicationQueued = false, changeTimer = null, revision = 0;
 let immediateSnapshot, observedTree, publishedTree;
 const transientToggles = new Map();
@@ -1126,7 +1126,7 @@ function getSnapshot(options = {}) {
   return snapshot;
 }
 function on(event, fn) {
-  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected change, toggle, zoom, paneAction, pinFocus, search, expansionLevel or focusExpansion and a callback');
+  if (!subscribers.has(event) || typeof fn !== 'function') throw new TypeError('Expected a supported Outliner event and a callback');
   if (destroyed) return () => {};
   subscribers.get(event).add(fn);
   return () => subscribers.get(event).delete(fn);
@@ -1564,6 +1564,10 @@ function shownKids(n) {
   return n !== zoom && sOver.get(n) === true ? n.children : n.children.filter(c => sShown.has(c));
 }
 function vis() { const o = []; (function w(n) { for (const c of shownKids(n)) { o.push(c); w(c); } })(zoom); return o; }
+function adjacentVisibleNode(n, direction) {
+  const nodes = vis(), index = nodes.indexOf(n);
+  return index < 0 ? undefined : nodes[index + direction];
+}
 const esc = x => x.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // Backdrop markup for the textarea: same text, transparent, with the matches wrapped in <mark>. The trailing newline keeps a last empty line's height.
 const el = (t, c) => { const e = document.createElement(t); if (c) e.className = c; return e; };
@@ -1703,12 +1707,8 @@ function bindField(binding, t) {
   listen(t, 'blur', () => { soft = false; });
   listen(t, 'keyup', e => { if (e.key === 'Enter') soft = false; });
   // Owner correction: one Enter intent for hardware and both software-input paths.
-  const applyBreak = () => {
-    const n = binding.getNode(), range = readEditorRange(n, t), intent = enterIntent(n, range, binding.head);
-    if (intent.kind === 'newline') {
-      t.setRangeText('\n', t.selectionStart, t.selectionEnd, 'end');
-      writeField(); refreshNodeEditor(binding); if (binding.head) crumbs(); save(true);
-    } else if (intent.kind === 'firstChild') {
+  const applyBreak = (n, intent) => {
+    if (intent.kind === 'firstChild') {
       record();
       const child = phOwner === n && !realChildren(n).length ? phNode : mk();
       if (child === phNode) promotePresentation(child);
@@ -1718,12 +1718,11 @@ function bindField(binding, t) {
       if (searching()) { sKeep.add(child); sOver.set(n, true); }
       render(child.id, 0);
     } else if (intent.kind === 'navigate') {
-      if (range.role === 'description' && t.selectionStart !== t.selectionEnd) {
+      if (t.dataset.role === 'description' && t.selectionStart !== t.selectionEnd) {
         t.setRangeText('', t.selectionStart, t.selectionEnd, 'end');writeField();refreshNodeEditor(binding);crumbs();save(true);
       }
       toFirst();
-    }
-    else enter(n, range);
+    } else enter(n, intent);
   };
   // Native header Undo traverses text transactions; a boundary command uses
   // the existing outline edge. Align those owners without recording Undo as new typing.
@@ -1752,10 +1751,18 @@ function bindField(binding, t) {
   listen(t, 'beforeinput', e => {
     if(!e.isComposing&&e.cancelable&&(e.inputType==='historyUndo'||e.inputType==='historyRedo')&&boundaryHistory(e.inputType==='historyUndo'?'undo':'redo')){e.preventDefault();return;}
     pendingBreak = null;
-    if (composing || e.isComposing || historyComposing || soft || !isBreak(e)) return;
+    if (composing || e.isComposing || historyComposing) return;
+    const n = binding.getNode();
+    if (!binding.head && e.cancelable && e.inputType === 'deleteContentBackward' && t.value === '' &&
+        deleteEmptyAfterPhoto(n, adjacentVisibleNode(n, -1))) {
+      e.preventDefault();
+      return;
+    }
+    if (soft || !isBreak(e)) return;
     // Interior description Enter is a native newline, preserving native header Undo.
-    if (enterIntent(binding.getNode(), readEditorRange(binding.getNode(), t), binding.head).kind === 'newline') { soft = true; return; }
-    if (e.cancelable) { e.preventDefault(); applyBreak(); }
+    const intent = enterIntent(n, readEditorRange(n, t), binding.head);
+    if (intent.kind === 'newline') { soft = true; return; }
+    if (e.cancelable) { e.preventDefault(); applyBreak(n, intent); }
     else pendingBreak = { value: t.value, start: t.selectionStart, end: t.selectionEnd };
   });
   listen(t, 'input', e => {
@@ -1772,7 +1779,7 @@ function bindField(binding, t) {
       const intent = enterIntent(n, {value:n.text,role:t.dataset.role,selectionStart:offset+old.start,selectionEnd:offset+old.end}, binding.head);
       pendingBreak = null;
       // Input-only fallback must also keep a legitimate browser-inserted description LF.
-      if (intent.kind !== 'newline') { t.value = old.value; t.setSelectionRange(old.start, old.end); applyBreak(); return; }
+      if (intent.kind !== 'newline') { t.value = old.value; t.setSelectionRange(old.start, old.end); applyBreak(n, intent); return; }
     }
     pendingBreak = null;
     writeField();
@@ -1800,10 +1807,11 @@ function bindField(binding, t) {
     if (descriptionEnter) {
       e.preventDefault();insertDescription(binding,t.selectionStart,t.selectionEnd);return;
     }
-    if ((e.key === 'Enter' || e.keyCode === 13) && (e.altKey || e.shiftKey || e.ctrlKey || e.metaKey)) {e.preventDefault();return;}
-    if ((e.key === 'Enter' || e.keyCode === 13) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      if (enterIntent(n, range, binding.head).kind === 'newline') { soft = true; return; }
-      e.preventDefault(); applyBreak(); return;
+    if (enter) {
+      if (e.altKey || e.shiftKey || e.ctrlKey || e.metaKey) { e.preventDefault(); return; }
+      const intent = enterIntent(n, range, binding.head);
+      if (intent.kind === 'newline') { soft = true; return; }
+      e.preventDefault(); applyBreak(n, intent); return;
     }
     if (collapsed && ((e.key === 'Backspace' && range.role === 'description' && t.selectionStart === 0) || (e.key === 'Delete' && range.role === 'title' && parts.hasDescription && t.selectionEnd === t.value.length))) {
       e.preventDefault(); setNodeText(n,splitNodeText(parts.title+parts.description,n.titleLineCount)); refreshNodeEditor(binding); focusEditor(binding, parts.title.length); if (binding.head) crumbs(); save(true); return;
@@ -1813,7 +1821,7 @@ function bindField(binding, t) {
       focusEditor(binding, range.role === 'title' ? parts.title.length + 1 + Math.min(column, parts.description.indexOf('\n') < 0 ? parts.description.length : parts.description.indexOf('\n')) : lastTitleStart+Math.min(column,parts.title.length-lastTitleStart)); return;
     }
     if (binding.head) {
-      if (e.key === 'Enter' || (e.key === 'ArrowDown' && range.end === n.text.length)) { e.preventDefault(); toFirst(); }
+      if (e.key === 'ArrowDown' && range.end === n.text.length) { e.preventDefault(); toFirst(); }
     } else keys(e, n, range);
   });
   if (!binding.head) listen(t, 'focus', () => { const n = binding.getNode(); anchor = n; if (sel.size) setSel(new Set()); });
@@ -2148,7 +2156,10 @@ function tab(back, photoCaret) {
   render(sel.size || photoCaret ? null : it[0].id, pos, {anchorId:it[0].id});
   if(photoCaret)focusPhotoCaret(it[0],photoCaret);
 }
-// Split the bullet at the caret into a new bullet (or outdent when the bullet is empty). Shared by Enter and the toolbar.
+function isEmptyTextLeaf(n) {
+  return n.text === '' && !n.children.length && !n.photos && n.kind !== 'spacer';
+}
+// Split the bullet at the caret into a new bullet (or outdent when the bullet is empty).
 // Current owner override: split titles into same-level siblings; descriptions keep their own newlines.
 function enterIntent(n, t, head = false) {
   const original = splitNodeText(t.value,n.titleLineCount), start = t.selectionStart, end = t.selectionEnd;
@@ -2156,13 +2167,14 @@ function enterIntent(n, t, head = false) {
   if(t.role==='description'){const offset=original.title.length+1;parts.description=original.description.slice(0,start-offset)+original.description.slice(end-offset);}
   else parts.title=original.title.slice(0,start)+original.title.slice(end);
   const text=joinNodeText(parts);
-  const result=kind=>({kind,text,start,parts});
+  const result=kind=>({kind,start,parts});
   if (t.role === 'description') return result(start < text.length ? 'newline' : head ? 'navigate' : 'insert');
   if (head && n.photos) return result('navigate');
   if (head) return result(start === end && start === original.title.length ? 'firstChild' : 'navigate');
-  // Explicit spacers insert below; ordinary empty rows keep their existing rules.
   if (n.kind === 'spacer' || n.photos && !text) return result('insert');
-  if (!text && !n.children.length && par.get(n) !== zoom) return result('outdent');
+  const parent = par.get(n);
+  if (isEmptyTextLeaf(n) && parent?.children.some(sibling => sibling.photos)) return result('insert');
+  if (!text && !n.children.length && parent !== zoom) return result('outdent');
   return result(start === 0 || start < parts.title.length ? 'split' : 'insert');
 }
 function insertAfterNodeEnd(n,newNode){
@@ -2171,13 +2183,10 @@ function insertAfterNodeEnd(n,newNode){
   else { openPlaceholderOwner(n); parent.children.splice(parent.children.indexOf(n)+1,0,newNode); }
   return true;
 }
-function enter(n, t) {
-  const p = par.get(n), intent = enterIntent(n, t), parts = intent.parts;
+function enter(n, intent) {
+  const p = par.get(n), parts = intent.parts;
   record(); // Commit pending typing before the single structural history step.
   if (intent.kind === 'outdent') { setNodeText(n,parts); outdent(n); render(n.id, 0); return; }
-  if (intent.kind === 'newline') {
-    setNodeText(n,{...parts,description:parts.description.slice(0,intent.start-parts.title.length-1)+'\n'+parts.description.slice(intent.start-parts.title.length-1)}); render(n.id, intent.start + 1); return;
-  }
   if (intent.kind === 'split') {
     const upper = setNodeText(mk(),{title:parts.title.slice(0,intent.start),hasDescription:false,description:''});
     setNodeText(n,{...parts,title:parts.title.slice(intent.start)});
@@ -2388,6 +2397,11 @@ function setPinnedFocus(nodeId) {
   pinnedFocusId = nodeId;
   menu.querySelector('[data-a="pinFocus"]').textContent = menuNode?.id === pinnedFocusId ? 'Unpin Focus' : 'Pin Focus';
 }
+const zoomToNodeAction = menu.querySelector('[data-a="zoomToNode"]');
+function canZoomToNode(node) {
+  return subscribers.get('zoomToNode').size > 0 && !!node && node.kind !== 'spacer' &&
+    !!(node.photos?.length || node.text.replace(/\u200B/g, '').trim() || realChildren(node).length);
+}
 function syncMenuActions(){
   const n=menuNode;
   const photoAction = menu.querySelector('[data-a="addPhoto"]'), placement = photoPlacement(n);
@@ -2396,6 +2410,7 @@ function syncMenuActions(){
   const importHidden = !canImportInto(n);
   menu.querySelector('[data-a="importFile"]').hidden = importHidden;
   menu.querySelector('[data-group="import"]').hidden = importHidden;
+  zoomToNodeAction.hidden = menu.classList.contains('size-only') || !canZoomToNode(n);
   const placeholder = !subscribers.get('pinFocus').size || n === phNode && phOwner && phOwner.children.length === 1 && !n.text && !n.children.length;
   menu.querySelector('[data-a="pinFocus"]').hidden = placeholder;
   menu.querySelector('[data-group="pin"]').hidden = placeholder; setPinnedFocus(pinnedFocusId);
@@ -2425,6 +2440,9 @@ menu.onclick = e => {
     return;
   }
   if (a === 'pinFocus') { if (menuNode && !menu.querySelector('[data-a="pinFocus"]').hidden) emit('pinFocus', {nodeId:menuNode.id,action:menuNode.id===pinnedFocusId?'unpin':'pin'}); }
+  else if (a === 'zoomToNode') {
+    if (canZoomToNode(menuNode) && find(root, menuNode.id) === menuNode) emit('zoomToNode', {nodeId:menuNode.id});
+  }
   else if (a === 'addPhoto') choosePhoto(menuNode);
   else if (a === 'delete') delItems(menuT, {focusPrevious:false});
   else if (a === 'importFile') chooseOutlineFile(menuNode);
@@ -2433,12 +2451,28 @@ menu.onclick = e => {
 };
 listen(document, 'click', e => { if (menu.classList.contains('show') && !menu.contains(e.target)) {commitSize();menu.classList.remove('show');} if (topMenu.classList.contains('show') && !topMenu.contains(e.target)) {depthController?.close();topMenu.classList.remove('show');} });
 
+function deleteEmptyAfterPhoto(n, previous) {
+  if (!previous?.photos || !isEmptyTextLeaf(n)) return false;
+  record();
+  rm(n);
+  render(undefined, undefined, {anchorId:previous.id});
+  focusPhotoCaret(previous, {slot:previous.photos.length});
+  return true;
+}
+function moveEditorVertically(e, n, pos) {
+  const up = e.key === 'ArrowUp', next = adjacentVisibleNode(n, up ? -1 : 1);
+  if (!next) return;
+  e.preventDefault();
+  if (next.photos && !e.altKey && !e.shiftKey) {
+    focusPhotoCaret(next, {slot:up ? next.photos.length : 0});
+  } else {
+    focusNode(next.id, Math.min(pos ?? (up ? next.text.length : 0), next.text.length));
+  }
+}
 function keys(e, n, t) {
-  // Keys pressed while an IME is composing belong to the IME (they confirm the text); line breaks from soft keyboards arrive via beforeinput.
-  if (e.isComposing || e.keyCode === 229) return;
   const pos = t.selectionStart, end = t.selectionEnd, p = par.get(n);
   const mod = e.ctrlKey || e.metaKey;
-  const isEnter = e.key === 'Enter' || e.keyCode === 13, isTab = e.key === 'Tab' || e.keyCode === 9;
+  const isTab = e.key === 'Tab' || e.keyCode === 9;
   if (e.key === 'Escape') { e.preventDefault(); anchor = cursor = n; setSel(new Set([n])); return; }
   if (e.shiftKey && !mod && !e.altKey && ((e.key === 'ArrowUp' && pos === 0) || (e.key === 'ArrowDown' && end === t.value.length))) { e.preventDefault(); anchor = cursor = n; setSel(new Set([n])); return; }
   if (isTab || (e.altKey && !e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft'))) {
@@ -2446,13 +2480,14 @@ function keys(e, n, t) {
     tab(e.shiftKey || e.key === 'ArrowLeft');
     return;
   }
-  if (isEnter && !e.shiftKey && !e.altKey && !mod) {
-    e.preventDefault(); enter(n, t); return;
-  }
   if (e.key === 'Backspace' && pos === 0 && end === 0) {
     if (n.photos) { e.preventDefault(); return; }
-    const list = vis(), i = list.indexOf(n), prev = list[i - 1];
-    if (prev?.photos && !n.children.length) { e.preventDefault(); return; }
+    const prev = adjacentVisibleNode(n, -1);
+    if (prev?.photos && !n.children.length) {
+      e.preventDefault();
+      deleteEmptyAfterPhoto(n, prev);
+      return;
+    }
     if (!n.children.length && prev) {
       e.preventDefault();
       const at = prev.text.length, left=splitNodeText(prev.text,prev.titleLineCount), right=splitNodeText(n.text,n.titleLineCount);
@@ -2476,10 +2511,7 @@ function keys(e, n, t) {
       return;
     }
     const first = pos === 0 || t.value.lastIndexOf('\n', pos - 1) === -1, last = t.value.indexOf('\n', end) === -1;
-    if ((up && first) || (!up && last)) {
-      const list = vis(), nx = list[list.indexOf(n) + (up ? -1 : 1)];
-      if (nx) { e.preventDefault(); focusNode(nx.id, Math.min(pos, nx.text.length)); }
-    }
+    if ((up && first) || (!up && last)) moveEditorVertically(e, n, pos);
   }
 }
 
@@ -3639,6 +3671,7 @@ function beginPhotoSort(event, node, photo, button) {
   const group = button.closest('.photo-group'), active = ownedActiveElement();
   // Keep the editor focused until the thumbnail click can open the viewer.
   if (active?._photoCaret && group.contains(active)) event.preventDefault();
+  if (node.photos.length < 2) return;
   photoClickBlockedUntil = 0;
   const state = photoSort = {node, photo, button, group, pointerId:event.pointerId, x:event.clientX, y:event.clientY, touch:event.pointerType === 'touch'};
   const activate = () => {
@@ -3818,6 +3851,10 @@ function bindPhotoCaret(group,node){
   listen(caret,'keydown',e=>{
     if(e.isComposing||e.keyCode===229||historyComposing||e.defaultPrevented)return;
     if(e.ctrlKey||e.metaKey||e.altKey)return;
+    if(!e.shiftKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){
+      moveEditorVertically(e,node);
+      return;
+    }
     if(e.key==='Enter'||e.key==='Backspace'||e.key==='Tab'||['ArrowLeft','ArrowRight'].includes(e.key)){
       e.preventDefault();
       act(e.key==='Enter'?'enter':e.key==='Backspace'?'remove':e.key==='Tab'?'indent':'move',e.shiftKey||e.key==='ArrowLeft');
@@ -3864,7 +3901,7 @@ function syncPhotoRow(binding) {
       photos.forEach((photo, index) => {
         const button = el('button', 'photo-thumb'), canvas = el('canvas'), status = el('span');
         button.type = 'button';
-        if (photos.length > 1) listen(button, 'pointerdown', event => beginPhotoSort(event, node, photo, button));
+        listen(button, 'pointerdown', event => beginPhotoSort(event, node, photo, button));
         const tile = el('div', 'photo-tile');
         tile.style.width = `${Math.min(160, 80 * photo.width / photo.height)}px`;
         status.textContent = 'Unavailable'; status.hidden = canvas.hidden = true;
@@ -3901,5 +3938,5 @@ if (!persistRequested) {
 initializePublication();
 return { on, getSnapshot, revealNode, acquirePhoto: photoService.acquire, getSearchQuery, destroy, showToast: toast, reportSaveFailure, setPaneMode, commitHostHistory, runHistory, setPinnedFocus, beginHostAdjustment, endHostAdjustment };
 }
-window.Outliner = { version: '1.23.3', apiVersion: 1, capabilities: ['outline-reveal-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'numeric-input-commit-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
+window.Outliner = { version: '1.24.1', apiVersion: 1, capabilities: ['outline-reveal-v1', 'zoom-to-node-v1', 'snapshot-v1', 'photo-attachments-v1', 'node-title-lines', 'change-event', 'toggle-event', 'zoom-event', 'storage-feedback', 'toast-v1', 'pane-controls', 'header-content', 'host-history', 'pin-focus-menu-v1', 'outline-focus-history-v1', 'focus-collapse-v1', 'focus-expansion-v1', 'search-query-v1', 'node-presentation-v1', 'node-presentation-v2', 'node-presentation-v3', 'numeric-stepper-v1', 'numeric-select-all-v1', 'numeric-input-commit-v1', 'adjustment-history-v1', 'expansion-level-event-v1'], createNumericStepper, bindNumericInputs, mount };
 })();
